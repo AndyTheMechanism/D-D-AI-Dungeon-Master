@@ -1,0 +1,5 @@
+{
+  "name": "D&D AI Dungeon Master",
+  "description": "A computer role-playing game where Gemini acts as the Dungeon Master. Upload your character sheet, roll dice, and embark on a text-based adventure.",
+  "requestFramePermissions": []
+}
