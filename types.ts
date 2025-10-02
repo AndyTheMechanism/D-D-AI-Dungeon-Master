@@ -5,6 +5,24 @@ export interface GameMessage {
 
 export type Dice = 'd2' | 'd4' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20' | 'd100';
 
+export type DmModel = 'gemini-2.5-flash' | 'gemini-2.5-pro';
+
+export type AdventureDifficulty = 'Easy' | 'Medium' | 'Hard' | 'Hardcore';
+
+export type QuestStatus = 'active' | 'completed' | 'failed';
+
+export interface Quest {
+  id: string;
+  title: string;
+  description: string;
+  status: QuestStatus;
+}
+
+export interface PersonalNote {
+  id: string;
+  content: string;
+}
+
 export interface CharacterSheet {
   coreIdentity: {
     characterName: string;

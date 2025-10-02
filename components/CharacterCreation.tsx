@@ -3,13 +3,14 @@ import type { CharacterSheet } from '../types';
 import { parseCharacterSheet } from '../services/geminiService';
 
 interface CharacterCreationProps {
-  onStartGame: (sheet: CharacterSheet) => void;
-  isStarting: boolean;
+  onCharacterFinalized: (sheet: CharacterSheet) => void;
+  isProcessing: boolean;
 }
 
 const ABILITY_SKILLS_MAP: Record<string, string[]> = {
     strength: ['athletics'],
     dexterity: ['acrobatics', 'sleight of hand', 'stealth'],
+    constitution: [],
     intelligence: ['arcana', 'history', 'investigation', 'nature', 'religion'],
     wisdom: ['animal handling', 'insight', 'medicine', 'perception', 'survival'],
     charisma: ['deception', 'intimidation', 'performance', 'persuasion']
@@ -61,14 +62,15 @@ const LabeledInput = ({ label, id, ...props }: { label: any, id: any, [x: string
     </div>
 );
 
-const TitledBox = ({ title, children, className = '' }) => (
+// FIX: Properly type the TitledBox component props.
+const TitledBox: React.FC<{ title: string; children: React.ReactNode; className?: string; }> = ({ title, children, className = '' }) => (
     <div className={`border-double border-4 rounded-lg border-dnd-olive ${className}`}>
         <h2 className="text-center text-xs uppercase font-bold py-1 font-modesto tracking-wider" style={{ color: 'var(--dnd5e-color-olive)', backgroundColor: 'rgba(0,0,0,0.05)' }}>{title}</h2>
         <div className="p-2">{children}</div>
     </div>
 );
 
-const TextAreaBox = ({ title, ...props }) => (
+const TextAreaBox = ({ title, ...props }: { title: string, [x: string]: any }) => (
     <div className="border-double border-4 rounded-lg border-dnd-olive flex flex-col h-full">
         <h2 className="text-center text-xs uppercase font-bold py-1 font-modesto tracking-wider flex-shrink-0" style={{ color: 'var(--dnd5e-color-olive)', backgroundColor: 'rgba(0,0,0,0.05)' }}>{title}</h2>
         <div className="flex-grow min-h-0">
@@ -77,7 +79,19 @@ const TextAreaBox = ({ title, ...props }) => (
     </div>
 );
 
-const AbilityScoreInput = ({ name, score, onScoreChange, savingThrow, onSavingThrowChange, skills, onSkillChange, proficiencyBonus }) => {
+// FIX: Define props for AbilityScoreInput and use React.FC to handle React-specific props like 'key'.
+interface AbilityScoreInputProps {
+    name: string;
+    score: string;
+    onScoreChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    savingThrow: { proficient: boolean };
+    onSavingThrowChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    skills: Record<string, { proficient: boolean }>;
+    onSkillChange: (skillKey: string, proficient: boolean) => void;
+    proficiencyBonus: string;
+}
+
+const AbilityScoreInput: React.FC<AbilityScoreInputProps> = ({ name, score, onScoreChange, savingThrow, onSavingThrowChange, skills, onSkillChange, proficiencyBonus }) => {
     const modifier = score ? Math.floor((parseInt(score, 10) - 10) / 2) : 0;
     const modString = modifier >= 0 ? `+${modifier}` : `${modifier}`;
     const profBonusValue = proficiencyBonus ? parseInt(proficiencyBonus.toString().replace('+', ''), 10) || 0 : 0;
@@ -92,7 +106,7 @@ const AbilityScoreInput = ({ name, score, onScoreChange, savingThrow, onSavingTh
                     <input type="checkbox" checked={savingThrow.proficient} onChange={onSavingThrowChange} className="form-checkbox h-4 w-4 bg-transparent border-stone-600 rounded-sm text-stone-900 focus:ring-stone-900 focus:ring-offset-0" />
                     <span className="text-sm font-bold font-signika">Saving Throw</span>
                 </div>
-                {ABILITY_SKILLS_MAP[name].map(skillName => {
+                {ABILITY_SKILLS_MAP[name as keyof typeof ABILITY_SKILLS_MAP].map(skillName => {
                      const skillKey = toCamelCase(skillName);
                      const isProficient = skills[skillKey]?.proficient || false;
                      const skillValue = modifier + (isProficient ? profBonusValue : 0);
@@ -120,7 +134,7 @@ const AbilityScoreInput = ({ name, score, onScoreChange, savingThrow, onSavingTh
 };
 
 
-const CharacterCreation: React.FC<CharacterCreationProps> = ({ onStartGame, isStarting }) => {
+const CharacterCreation: React.FC<CharacterCreationProps> = ({ onCharacterFinalized, isProcessing }) => {
   const [sheet, setSheet] = useState<CharacterSheet>(initialSheetState);
   const [isParsing, setIsParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -171,7 +185,7 @@ const CharacterCreation: React.FC<CharacterCreationProps> = ({ onStartGame, isSt
         return;
     }
     setError(null);
-    onStartGame(sheet);
+    onCharacterFinalized(sheet);
   }
 
   const handleChange = (path: string, value: any) => {
@@ -197,7 +211,7 @@ const CharacterCreation: React.FC<CharacterCreationProps> = ({ onStartGame, isSt
         <div className="flex justify-center gap-4 mb-6">
              <button
                 onClick={handleUploadClick}
-                disabled={isParsing || isStarting}
+                disabled={isParsing || isProcessing}
                 className="px-6 py-3 border-2 border-dashed border-slate-500 rounded-lg text-slate-300 hover:bg-slate-600 hover:border-[var(--dnd5e-color-gold)] hover:text-[var(--dnd5e-color-gold)] transition-colors disabled:opacity-50 disabled:cursor-wait font-roboto-slab"
             >
                 {isParsing ? 'Reading the Scrolls...' : 'Upload & Auto-fill with AI'}
@@ -248,7 +262,7 @@ const CharacterCreation: React.FC<CharacterCreationProps> = ({ onStartGame, isSt
                            <div className="uppercase font-bold text-stone-600">Armor Training</div>
                            <div className="flex justify-around">
                             {Object.keys(sheet.equipment.proficiencies.armorTraining).map(key => (
-                               <label key={key} className="flex items-center gap-1 capitalize"><input type="checkbox" checked={sheet.equipment.proficiencies.armorTraining[key]} onChange={e => handleChange(`equipment.proficiencies.armorTraining.${key}`, e.target.checked)} className="form-checkbox bg-transparent border-stone-600 text-stone-900 focus:ring-stone-900" />{key}</label>
+                               <label key={key} className="flex items-center gap-1 capitalize"><input type="checkbox" checked={(sheet.equipment.proficiencies.armorTraining as any)[key]} onChange={e => handleChange(`equipment.proficiencies.armorTraining.${key}`, e.target.checked)} className="form-checkbox bg-transparent border-stone-600 text-stone-900 focus:ring-stone-900" />{key}</label>
                             ))}
                            </div>
                            <div className="uppercase font-bold text-stone-600 mt-2">Weapons</div>
@@ -316,8 +330,8 @@ const CharacterCreation: React.FC<CharacterCreationProps> = ({ onStartGame, isSt
                                 <div key={level}>
                                     <label className="font-bold">Level {level}</label>
                                     <div className="flex gap-2">
-                                        <input placeholder="Total" className="w-full border-b border-stone-400 text-center bg-transparent font-roboto-slab focus:outline-none" value={sheet.attacksSpellcasting.spellSlots[level]?.total} onChange={e => handleChange(`attacksSpellcasting.spellSlots.${level}.total`, e.target.value)} />
-                                        <input placeholder="Expe" className="w-full border-b border-stone-400 text-center bg-transparent font-roboto-slab focus:outline-none" value={sheet.attacksSpellcasting.spellSlots[level]?.expended} onChange={e => handleChange(`attacksSpellcasting.spellSlots.${level}.expended`, e.target.value)} />
+                                        <input placeholder="Total" className="w-full border-b border-stone-400 text-center bg-transparent font-roboto-slab focus:outline-none" value={(sheet.attacksSpellcasting.spellSlots as any)[level]?.total} onChange={e => handleChange(`attacksSpellcasting.spellSlots.${level}.total`, e.target.value)} />
+                                        <input placeholder="Expe" className="w-full border-b border-stone-400 text-center bg-transparent font-roboto-slab focus:outline-none" value={(sheet.attacksSpellcasting.spellSlots as any)[level]?.expended} onChange={e => handleChange(`attacksSpellcasting.spellSlots.${level}.expended`, e.target.value)} />
                                     </div>
                                 </div>
                             ))}
@@ -352,10 +366,10 @@ const CharacterCreation: React.FC<CharacterCreationProps> = ({ onStartGame, isSt
             <div className="text-center pt-6">
                 <button
                     type="submit"
-                    disabled={isParsing || isStarting}
+                    disabled={isParsing || isProcessing}
                     className="px-10 py-4 bg-[var(--dnd5e-color-olive)] hover:bg-red-900 text-white font-bold rounded-md shadow-lg transition-transform transform hover:scale-105 disabled:bg-slate-500 disabled:cursor-not-allowed font-modesto text-2xl"
                 >
-                    {isStarting ? 'Summoning the DM...' : 'Start Adventure'}
+                    {isProcessing ? 'Please Wait...' : 'Set Up Adventure'}
                 </button>
             </div>
         </form>
@@ -366,7 +380,7 @@ const CharacterCreation: React.FC<CharacterCreationProps> = ({ onStartGame, isSt
             onChange={handleFileChange}
             className="hidden"
             accept=".txt, .md"
-            disabled={isParsing || isStarting}
+            disabled={isParsing || isProcessing}
         />
     </div>
   );

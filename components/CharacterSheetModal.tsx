@@ -11,6 +11,7 @@ interface CharacterSheetModalProps {
 const ABILITY_SKILLS_MAP: Record<string, string[]> = {
     strength: ['athletics'],
     dexterity: ['acrobatics', 'sleight of hand', 'stealth'],
+    constitution: [],
     intelligence: ['arcana', 'history', 'investigation', 'nature', 'religion'],
     wisdom: ['animal handling', 'insight', 'medicine', 'perception', 'survival'],
     charisma: ['deception', 'intimidation', 'performance', 'persuasion']
@@ -25,7 +26,8 @@ const LabeledInput = ({ label, id, ...props }: { label: any, id: any, [x: string
     </div>
 );
 
-const TitledBox = ({ title, children, className = '' }: { title: any; children: React.ReactNode; className?: string; }) => (
+// FIX: Update TitledBox to use React.FC for consistent and correct typing.
+const TitledBox: React.FC<{ title: string; children: React.ReactNode; className?: string; }> = ({ title, children, className = '' }) => (
     <div className={`border-double border-4 rounded-lg border-dnd-olive ${className}`}>
         <h2 className="text-center text-xs uppercase font-bold py-1 font-modesto tracking-wider" style={{ color: 'var(--dnd5e-color-olive)', backgroundColor: 'rgba(0,0,0,0.05)' }}>{title}</h2>
         <div className="p-2">{children}</div>
@@ -41,14 +43,22 @@ const TextAreaBox = ({ title, ...props }: { title: any; [x: string]: any }) => (
     </div>
 );
 
-const EditableAbilityScore = ({ 
+// FIX: Define props for EditableAbilityScore and use React.FC to handle React-specific props like 'key'.
+interface EditableAbilityScoreProps {
+    name: string;
+    score: string;
+    onScoreChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    savingThrow: { proficient: boolean };
+    onSavingThrowChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    skills: Record<string, { proficient: boolean }>;
+    onSkillChange: (skillKey: string, proficient: boolean) => void;
+    proficiencyBonus: string;
+    onStatRoll: (name: string, modifier: number) => void;
+}
+
+const EditableAbilityScore: React.FC<EditableAbilityScoreProps> = ({ 
     name, score, onScoreChange, savingThrow, onSavingThrowChange, skills, onSkillChange, 
     proficiencyBonus, onStatRoll 
-}: {
-    name: string; score: string; onScoreChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-    savingThrow: { proficient: boolean }; onSavingThrowChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-    skills: Record<string, { proficient: boolean }>; onSkillChange: (skillKey: string, proficient: boolean) => void;
-    proficiencyBonus: string; onStatRoll: (name: string, modifier: number) => void;
 }) => {
     const modifier = score ? Math.floor((parseInt(score, 10) - 10) / 2) : 0;
     const modString = modifier >= 0 ? `+${modifier}` : `${modifier}`;
@@ -78,7 +88,7 @@ const EditableAbilityScore = ({
                     <input type="checkbox" checked={savingThrow.proficient} onChange={onSavingThrowChange} className="form-checkbox h-4 w-4 bg-transparent border-stone-600 rounded-sm text-stone-900 focus:ring-stone-900 focus:ring-offset-0" />
                     <button type="button" onClick={handleSavingThrowRoll} className="text-sm font-bold font-signika hover:text-stone-600">Saving Throw</button>
                 </div>
-                {ABILITY_SKILLS_MAP[name].map(skillName => {
+                {ABILITY_SKILLS_MAP[name as keyof typeof ABILITY_SKILLS_MAP].map(skillName => {
                     const skillKey = toCamelCase(skillName);
                     const isProficient = skills[skillKey]?.proficient || false;
                     const skillValue = modifier + (isProficient ? profBonusValue : 0);

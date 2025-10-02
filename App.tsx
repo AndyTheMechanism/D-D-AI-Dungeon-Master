@@ -1,6 +1,6 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { GameMessage, Dice, CharacterSheet } from './types';
-import { startAdventure, continueAdventure, translateText } from './services/geminiService';
+import React, { useState, useCallback, useRef } from 'react';
+import { GameMessage, Dice, CharacterSheet, DmModel, Quest, PersonalNote, AdventureDifficulty } from './types';
+import { startAdventure, continueAdventure, restartAdventureWithNewModel, generateAdventureDetails } from './services/geminiService';
 import GameLog from './components/GameLog';
 import PlayerInput from './components/PlayerInput';
 import DiceRoller from './components/DiceRoller';
@@ -9,7 +9,11 @@ import { Chat } from '@google/genai';
 import CharacterSheetModal from './components/CharacterSheetModal';
 import CharacterIcon from './components/icons/CharacterIcon';
 import TranslateIcon from './components/icons/TranslateIcon';
-import TranslationModal from './components/TranslationModal';
+import ModelSwitcher from './components/ModelSwitcher';
+import JournalIcon from './components/icons/JournalIcon';
+import JournalModal from './components/JournalModal';
+import AdventureSetupModal from './components/AdventureSetupModal';
+import StartingGameLoader from './components/StartingGameLoader';
 
 function formatSheetForPrompt(sheet: CharacterSheet): string {
   let output = "Here is my character sheet:\n\n";
@@ -168,22 +172,34 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [gameStarted, setGameStarted] = useState<boolean>(false);
   const [characterSheet, setCharacterSheet] = useState<CharacterSheet | null>(null);
+  const [pendingCharacterSheet, setPendingCharacterSheet] = useState<CharacterSheet | null>(null);
   const [isSheetVisible, setIsSheetVisible] = useState<boolean>(false);
-  
-  const [translationData, setTranslationData] = useState<{ original: string; translated: string | null; error: string | null } | null>(null);
-  const [isTranslating, setIsTranslating] = useState<boolean>(false);
+  const [isJournalVisible, setIsJournalVisible] = useState<boolean>(false);
+  const [isAdventureSetupVisible, setIsAdventureSetupVisible] = useState<boolean>(false);
+  const [quests, setQuests] = useState<Quest[]>([]);
+  const [personalNotes, setPersonalNotes] = useState<PersonalNote[]>([]);
   const [selectedText, setSelectedText] = useState<string>('');
+  const [dmModel, setDmModel] = useState<DmModel>('gemini-2.5-pro');
 
   const chatRef = useRef<Chat | null>(null);
 
-  const handleStartGame = useCallback(async (sheetData: CharacterSheet) => {
+  const handleCharacterFinalized = useCallback((sheetData: CharacterSheet) => {
+    setPendingCharacterSheet(sheetData);
+    setIsAdventureSetupVisible(true);
+  }, []);
+
+  const handleStartGame = useCallback(async (
+    sheetData: CharacterSheet, 
+    adventureDetails: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string }
+  ) => {
     setCharacterSheet(sheetData);
     const characterSheetString = formatSheetForPrompt(sheetData);
     
     setIsLoading(true);
     setError(null);
+    setIsAdventureSetupVisible(false);
     try {
-      const { chat, openingMessage } = await startAdventure(characterSheetString);
+      const { chat, openingMessage } = await startAdventure(characterSheetString, dmModel, adventureDetails);
       chatRef.current = chat;
       setGameLog([{ sender: 'dm', text: openingMessage }]);
       setGameStarted(true);
@@ -193,7 +209,15 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [dmModel]);
+  
+  const handleGenerateAdventureDetails = useCallback(async (difficulty: AdventureDifficulty) => {
+    if (!pendingCharacterSheet) {
+      throw new Error("Character sheet not available for generation.");
+    }
+    const characterSheetString = formatSheetForPrompt(pendingCharacterSheet);
+    return await generateAdventureDetails(difficulty, characterSheetString);
+  }, [pendingCharacterSheet]);
 
   const handlePlayerAction = useCallback(async (action: string) => {
     if (!chatRef.current || isLoading || !characterSheet) return;
@@ -204,7 +228,7 @@ const App: React.FC = () => {
     setError(null);
 
     try {
-      const { text: dmResponse, sheetUpdates } = await continueAdventure(chatRef.current, action);
+      const { text: dmResponse, sheetUpdates, questUpdates } = await continueAdventure(chatRef.current, action);
       
       const newDmMessage: GameMessage = { sender: 'dm', text: dmResponse };
       const messagesToAdd: GameMessage[] = [newDmMessage];
@@ -229,9 +253,44 @@ const App: React.FC = () => {
       
         const systemMessage: GameMessage = { 
           sender: 'system', 
-          text: `[SYSTEM] ${updateDetails}.` 
+          text: `[SYSTEM] Character sheet updated: ${updateDetails}.` 
         };
         messagesToAdd.push(systemMessage);
+      }
+
+      if (questUpdates) {
+        if (questUpdates.add) {
+          const newQuest: Quest = {
+            id: Date.now().toString(),
+            ...questUpdates.add,
+            status: 'active'
+          };
+          setQuests(prev => [...prev, newQuest]);
+          const systemMessage: GameMessage = {
+            sender: 'system',
+            text: `[SYSTEM] New quest added to journal: "${newQuest.title}".`
+          };
+          messagesToAdd.push(systemMessage);
+        }
+        if (questUpdates.update) {
+          const { questTitleToUpdate, ...updates } = questUpdates.update;
+          let questUpdated = false;
+          setQuests(prev => prev.map(q => {
+            if (q.title.toLowerCase() === questTitleToUpdate.toLowerCase()) {
+              questUpdated = true;
+              return { ...q, ...updates };
+            }
+            return q;
+          }));
+          if (questUpdated) {
+            const updateStrings = Object.entries(updates).map(([key, value]) => `${key} changed to "${value}"`);
+            const systemMessage: GameMessage = {
+              sender: 'system',
+              text: `[SYSTEM] Quest "${questTitleToUpdate}" updated: ${updateStrings.join(', ')}.`
+            };
+            messagesToAdd.push(systemMessage);
+          }
+        }
       }
       
       setGameLog(prevLog => [...prevLog, ...messagesToAdd]);
@@ -279,29 +338,25 @@ const App: React.FC = () => {
     setSelectedText(text);
   }, []);
 
-  const handleTranslateClick = async () => {
+  const handleTranslateClick = () => {
     if (!selectedText) return;
 
-    const textToTranslate = selectedText;
-    
-    setIsTranslating(true);
-    setTranslationData({ original: textToTranslate, translated: null, error: null });
+    const encodedText = encodeURIComponent(selectedText);
+    const url = `https://translate.google.com/?sl=auto&tl=ru&text=${encodedText}&op=translate`;
 
-    try {
-        const result = await translateText(textToTranslate);
-        setTranslationData({ original: textToTranslate, translated: result, error: null });
-    } catch (e) {
-        const errorMessage = e instanceof Error ? e.message : 'An unknown error occurred during translation.';
-        setTranslationData({ original: textToTranslate, translated: null, error: errorMessage });
-    } finally {
-        setIsTranslating(false);
-    }
+    const popupWidth = 800;
+    const popupHeight = 600;
+    // Center the popup on the screen
+    const left = window.screen.width / 2 - popupWidth / 2;
+    const top = window.screen.height / 2 - popupHeight / 2;
+
+    window.open(
+      url,
+      'google-translate-popup',
+      `width=${popupWidth},height=${popupHeight},top=${top},left=${left},resizable=yes,scrollbars=yes`
+    );
   };
   
-  const handleCloseTranslation = () => {
-    setTranslationData(null);
-  };
-
   const handleSheetSave = useCallback((updatedSheet: CharacterSheet) => {
     if (!characterSheet) return;
 
@@ -336,6 +391,56 @@ const App: React.FC = () => {
     setIsSheetVisible(false);
   }, [characterSheet, handlePlayerAction]);
 
+  const handleNotesSave = useCallback((updatedNotes: PersonalNote[]) => {
+    const originalNotesContent = personalNotes.map(n => n.content).join('\n');
+    const updatedNotesContent = updatedNotes.map(n => n.content).join('\n');
+
+    if (originalNotesContent !== updatedNotesContent) {
+      // Simple diff for now, can be improved
+      const oocMessage = `OOC: The player has updated their personal notes in their journal.`;
+      
+      setPersonalNotes(updatedNotes);
+      // Send the message to the DM
+      setTimeout(() => handlePlayerAction(oocMessage), 0);
+    }
+
+    setIsJournalVisible(false);
+  }, [personalNotes, handlePlayerAction]);
+
+  const handleModelChange = useCallback(async (newModel: DmModel) => {
+    if (newModel === dmModel || isLoading) return;
+
+    const oldModel = dmModel;
+    setDmModel(newModel); // Optimistically update UI
+
+    if (gameStarted && chatRef.current && characterSheet) {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const history = await chatRef.current.getHistory();
+            const characterSheetString = formatSheetForPrompt(characterSheet);
+            
+            const { chat: newChat } = await restartAdventureWithNewModel(characterSheetString, newModel, history);
+            
+            chatRef.current = newChat;
+
+            const systemMessage: GameMessage = {
+                sender: 'system',
+                text: `[SYSTEM] Dungeon Master model has been switched to ${newModel}.`
+            };
+            setGameLog(prevLog => [...prevLog, systemMessage]);
+
+        } catch (e) {
+            setError(e instanceof Error ? `Error switching model: ${e.message}` : 'An unknown error occurred.');
+            console.error(e);
+            // Revert model state on error
+            setDmModel(oldModel);
+        } finally {
+            setIsLoading(false);
+        }
+    }
+  }, [dmModel, gameStarted, characterSheet, isLoading, handlePlayerAction]);
+
 
   return (
     <div className="h-screen bg-slate-900 text-slate-200 flex flex-col items-center p-4 selection:bg-amber-500 selection:text-slate-900" style={{ backgroundImage: 'url(https://www.transparenttextures.com/patterns/dark-denim.png)' }}>
@@ -347,8 +452,10 @@ const App: React.FC = () => {
       </header>
       
       <main className="w-full max-w-5xl flex-grow bg-black/30 rounded-lg shadow-2xl border border-slate-700 flex flex-col overflow-hidden">
-        {!gameStarted ? (
-           <CharacterCreation onStartGame={handleStartGame} isStarting={isLoading} />
+        {isLoading && !gameStarted ? (
+          <StartingGameLoader />
+        ) : !gameStarted ? (
+           <CharacterCreation onCharacterFinalized={handleCharacterFinalized} isProcessing={isLoading} />
         ) : (
           <>
             <div className="flex-grow overflow-y-auto">
@@ -358,6 +465,11 @@ const App: React.FC = () => {
                <div className="flex justify-between items-center mb-2">
                  <p className="text-sm text-slate-400 font-modesto tracking-wider">Player Actions</p>
                  <div className="flex items-center gap-2">
+                   <ModelSwitcher 
+                     currentModel={dmModel}
+                     onModelChange={handleModelChange}
+                     disabled={isLoading}
+                   />
                    <button 
                      onClick={handleTranslateClick}
                      disabled={isLoading || !selectedText}
@@ -366,6 +478,15 @@ const App: React.FC = () => {
                    >
                       <TranslateIcon className="w-5 h-5 text-amber-300 group-hover:text-white transition-colors" />
                       <span className="text-sm font-roboto-slab font-bold">Translate</span>
+                   </button>
+                   <button 
+                     onClick={() => setIsJournalVisible(true)}
+                     disabled={isLoading}
+                     className="flex items-center gap-2 px-3 py-1 rounded-md bg-[var(--dnd5e-color-olive)] hover:bg-red-900 border border-amber-800 text-white transition-all duration-200 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed group"
+                     aria-label="View Journal"
+                   >
+                      <JournalIcon className="w-5 h-5 text-amber-300 group-hover:text-white transition-colors" />
+                      <span className="text-sm font-roboto-slab font-bold">Journal</span>
                    </button>
                    <button 
                      onClick={() => setIsSheetVisible(true)}
@@ -389,6 +510,15 @@ const App: React.FC = () => {
       <footer className="w-full max-w-4xl text-center mt-6 text-sm text-slate-500 font-signika">
         <p>Powered by Google Gemini. This is a fictional game. Have fun!</p>
       </footer>
+      
+      {isAdventureSetupVisible && pendingCharacterSheet && (
+        <AdventureSetupModal
+          sheet={pendingCharacterSheet}
+          onClose={() => setIsAdventureSetupVisible(false)}
+          onStartAdventure={handleStartGame}
+          onGenerateDetails={handleGenerateAdventureDetails}
+        />
+      )}
 
       {isSheetVisible && characterSheet && (
         <CharacterSheetModal 
@@ -398,16 +528,17 @@ const App: React.FC = () => {
           onSave={handleSheetSave}
         />
       )}
-      
-      {translationData && (
-        <TranslationModal
-          originalText={translationData.original}
-          translatedText={translationData.translated}
-          isLoading={isTranslating}
-          error={translationData.error}
-          onClose={handleCloseTranslation}
+
+      {isJournalVisible && (
+        <JournalModal 
+          isOpen={isJournalVisible}
+          quests={quests}
+          notes={personalNotes}
+          onClose={() => setIsJournalVisible(false)}
+          onNotesSave={handleNotesSave}
         />
       )}
+      
     </div>
   );
 };
