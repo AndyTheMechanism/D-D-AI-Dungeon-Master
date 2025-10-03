@@ -15,6 +15,7 @@ import JournalModal from './components/JournalModal';
 import AdventureSetupModal from './components/AdventureSetupModal';
 import StartingGameLoader from './components/StartingGameLoader';
 import MapView from './components/MapView';
+import RollTypeSelector from './components/RollTypeSelector';
 
 const App: React.FC = () => {
   const {
@@ -27,6 +28,7 @@ const App: React.FC = () => {
     personalNotes,
     dmModel,
     mapState,
+    rollType,
   } = useGameState();
 
   const {
@@ -38,6 +40,7 @@ const App: React.FC = () => {
     handleSheetSave,
     handleNotesSave,
     handleModelChange,
+    handleRollTypeChange,
   } = useGameActions();
 
   // Local UI state (modals, selections, etc.)
@@ -102,29 +105,48 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen bg-slate-900 text-slate-200 flex flex-col items-center p-4 selection:bg-amber-500 selection:text-slate-900" style={{ backgroundImage: 'url(https://www.transparenttextures.com/patterns/dark-denim.png)' }}>
-      <header className="w-full max-w-4xl text-center mb-6">
-        <h1 className="text-5xl md:text-6xl font-modesto text-amber-300 drop-shadow-[0_2px_2px_rgba(0,0,0,0.7)]">
-          D&D AI Dungeon Master
-        </h1>
-        <p className="text-slate-400 mt-2 italic font-signika">Your adventure awaits...</p>
-      </header>
-      
-      <main className="w-full max-w-5xl flex-grow bg-black/30 rounded-lg shadow-2xl border border-slate-700 flex flex-col overflow-hidden">
+    <div className="h-screen bg-slate-900 text-slate-200 flex flex-col items-center justify-center p-2 sm:p-4 selection:bg-amber-500 selection:text-slate-900" style={{ backgroundImage: 'url(https://www.transparenttextures.com/patterns/dark-denim.png)' }}>
+      {!gameStarted && (
+        <header className="w-full max-w-4xl text-center mb-6">
+          <h1 className="text-5xl md:text-6xl font-modesto text-amber-300 drop-shadow-[0_2px_2px_rgba(0,0,0,0.7)]">
+            D&D AI Dungeon Master
+          </h1>
+          <p className="text-slate-400 mt-2 italic font-signika">Your adventure awaits...</p>
+        </header>
+      )}
+
+      <main className={`w-full h-full rounded-lg shadow-2xl border border-slate-700 overflow-hidden ${
+        gameStarted 
+        ? 'max-w-screen-2xl flex flex-row bg-black/30' 
+        : 'max-w-5xl flex flex-col bg-black/30'
+      }`}>
         {isLoading && !gameStarted ? (
           <StartingGameLoader />
         ) : !gameStarted ? (
            <CharacterCreation onCharacterFinalized={handleCharacterFinalized} isProcessing={isLoading} />
         ) : (
           <>
-            <div className="h-1/2 bg-black border-b border-slate-600 p-2 flex items-center justify-center">
-                <MapView mapState={mapState} />
+            {/* Left Column */}
+            <div className="w-7/12 flex flex-col p-4 gap-4">
+                <header className="w-full text-left flex-shrink-0">
+                    <h1 className="text-4xl md:text-5xl font-modesto text-amber-300 drop-shadow-[0_2px_2px_rgba(0,0,0,0.7)]">
+                    D&D AI Dungeon Master
+                    </h1>
+                    <p className="text-slate-400 mt-1 italic font-signika">Your adventure awaits...</p>
+                </header>
+                <div className="flex-grow bg-black border border-slate-600 rounded-md p-2 flex items-center justify-center min-h-0">
+                    <MapView mapState={mapState} />
+                </div>
+                 <footer className="w-full text-left text-sm text-slate-500 font-signika flex-shrink-0">
+                    <p>Powered by Google Gemini. This is a fictional game. Have fun!</p>
+                </footer>
             </div>
-            <div className="h-1/2 flex flex-col">
+            {/* Right Column */}
+            <div className="w-5/12 flex flex-col border-l border-slate-700">
                 <div className="flex-grow overflow-y-auto">
                     <GameLog log={gameLog} isLoading={isLoading} onTextSelect={handleTextSelection} />
                 </div>
-                <div className="flex-shrink-0 p-4 border-t border-slate-600 bg-slate-800">
+                <div className="flex-shrink-0 p-4 border-t border-slate-600 bg-slate-800/50">
                    <div className="flex justify-between items-center mb-2">
                      <p className="text-sm text-slate-400 font-modesto tracking-wider">Player Actions</p>
                      <div className="flex items-center gap-2">
@@ -162,6 +184,13 @@ const App: React.FC = () => {
                        </button>
                      </div>
                   </div>
+                  <div className="flex justify-center mb-3">
+                    <RollTypeSelector 
+                        currentRollType={rollType}
+                        onRollTypeChange={handleRollTypeChange}
+                        disabled={isLoading}
+                    />
+                  </div>
                   <DiceRoller onRoll={handleDiceRoll} disabled={isLoading} />
                   <PlayerInput onSend={handlePlayerAction} disabled={isLoading} />
                   {error && <p className="text-red-400 mt-2 text-center">{error}</p>}
@@ -170,10 +199,12 @@ const App: React.FC = () => {
           </>
         )}
       </main>
-
-      <footer className="w-full max-w-4xl text-center mt-6 text-sm text-slate-500 font-signika">
-        <p>Powered by Google Gemini. This is a fictional game. Have fun!</p>
-      </footer>
+      
+      {!gameStarted && (
+        <footer className="w-full max-w-4xl text-center mt-6 text-sm text-slate-500 font-signika">
+            <p>Powered by Google Gemini. This is a fictional game. Have fun!</p>
+        </footer>
+      )}
       
       {isAdventureSetupVisible && pendingCharacterSheet && (
         <AdventureSetupModal

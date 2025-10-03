@@ -24,7 +24,7 @@ const getEntityVisuals = (entity: MapEntity | { type: 'floor' }): { component: R
       };
     case 'object':
       return {
-        component: <div className="w-2/3 h-2/3 bg-yellow-400 rounded-full" />,
+        component: <div className="w-2/3 h-2/3 rounded-full" style={{ backgroundColor: (entity as MapEntity).color || '#facc15' }} />,
         title: (entity as MapEntity).name || 'Object'
       };
     case 'door':

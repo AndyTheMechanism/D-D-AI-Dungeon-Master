@@ -9,6 +9,8 @@ export type DmModel = 'gemini-2.5-flash' | 'gemini-2.5-pro';
 
 export type AdventureDifficulty = 'Easy' | 'Medium' | 'Hard' | 'Hardcore';
 
+export type RollType = 'normal' | 'advantage' | 'disadvantage';
+
 export type QuestStatus = 'active' | 'completed' | 'failed';
 
 export interface Quest {
@@ -31,6 +33,7 @@ export interface MapEntity {
   x: number;
   y: number;
   name?: string;
+  color?: string;
 }
 
 export interface MapState {

@@ -1,5 +1,5 @@
 import React, { createContext, useReducer, useContext, Dispatch } from 'react';
-import { GameMessage, CharacterSheet, Quest, PersonalNote, DmModel, MapState } from '../types';
+import { GameMessage, CharacterSheet, Quest, PersonalNote, DmModel, MapState, RollType } from '../types';
 import { Chat } from '@google/genai';
 
 // State shape
@@ -14,6 +14,8 @@ interface GameState {
     dmModel: DmModel;
     chat: Chat | null;
     mapState: MapState | null;
+    pendingOocMessage: string | null;
+    rollType: RollType;
 }
 
 // Initial state
@@ -28,6 +30,8 @@ const initialState: GameState = {
     dmModel: 'gemini-2.5-pro',
     chat: null,
     mapState: null,
+    pendingOocMessage: null,
+    rollType: 'normal',
 };
 
 // Action types
@@ -41,7 +45,10 @@ export type Action =
     | { type: 'UPDATE_SHEET'; payload: CharacterSheet }
     | { type: 'UPDATE_NOTES'; payload: PersonalNote[] }
     | { type: 'SET_MODEL'; payload: DmModel }
-    | { type: 'SET_CHAT'; payload: Chat | null };
+    | { type: 'SET_CHAT'; payload: Chat | null }
+    | { type: 'SET_PENDING_OOC_MESSAGE'; payload: string }
+    | { type: 'CLEAR_PENDING_OOC_MESSAGE' }
+    | { type: 'SET_ROLL_TYPE'; payload: RollType };
 
 // Reducer
 const gameReducer = (state: GameState, action: Action): GameState => {
@@ -91,6 +98,12 @@ const gameReducer = (state: GameState, action: Action): GameState => {
             return { ...state, dmModel: action.payload };
         case 'SET_CHAT':
              return { ...state, chat: action.payload };
+        case 'SET_PENDING_OOC_MESSAGE':
+            return { ...state, pendingOocMessage: action.payload };
+        case 'CLEAR_PENDING_OOC_MESSAGE':
+            return { ...state, pendingOocMessage: null };
+        case 'SET_ROLL_TYPE':
+            return { ...state, rollType: action.payload };
         default:
             return state;
     }

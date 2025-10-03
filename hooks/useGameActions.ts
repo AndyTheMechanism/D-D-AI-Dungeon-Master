@@ -1,7 +1,8 @@
 import { useCallback } from 'react';
 import { useGameState, useGameDispatch } from '../context/GameContext';
 import { startAdventure, continueAdventure, restartAdventureWithNewModel, generateAdventureDetails } from '../services/geminiService';
-import { CharacterSheet, Dice, DmModel, GameMessage, PersonalNote, Quest, AdventureDifficulty, MapState } from '../types';
+import { CharacterSheet, Dice, DmModel, GameMessage, PersonalNote, Quest, AdventureDifficulty, RollType } from '../types';
+import { AdventureResult } from '../services/geminiService';
 
 // Helper functions (previously in App.tsx)
 function formatSheetForPrompt(sheet: CharacterSheet): string {
@@ -110,17 +111,29 @@ const findChanges = (original: any, updated: any, path: string = ''): Record<str
 export const useGameActions = () => {
     const state = useGameState();
     const dispatch = useGameDispatch();
-    const { chat, isLoading, characterSheet, personalNotes, dmModel } = state;
+    const { chat, isLoading, characterSheet, personalNotes, dmModel, quests, pendingOocMessage, rollType } = state;
 
-    const processAdventureResult = useCallback((result: { text: string; sheetUpdates: any; questUpdates: any; mapUpdate: MapState | null; }) => {
+    const processAndDispatchResult = useCallback((
+        result: AdventureResult,
+        currentSheet: CharacterSheet,
+        currentQuests: Quest[]
+    ): { updatedSheet: CharacterSheet, updatedQuests: Quest[] } => {
+
         const { text: dmResponse, sheetUpdates, questUpdates, mapUpdate } = result;
-        const messages: GameMessage[] = [{ sender: 'dm', text: dmResponse }];
+        const messages: GameMessage[] = [];
         let newSheet: CharacterSheet | undefined = undefined;
         let newQuests: Quest[] | undefined = undefined;
         let updatedQuests: Quest[] | undefined = undefined;
+        let finalSheet = currentSheet;
+        let finalQuests = currentQuests;
 
-        if (sheetUpdates && Object.keys(sheetUpdates).length > 0 && characterSheet) {
-            newSheet = applySheetUpdates(characterSheet, sheetUpdates);
+        if (dmResponse) {
+            messages.push({ sender: 'dm', text: dmResponse });
+        }
+
+        if (sheetUpdates && Object.keys(sheetUpdates).length > 0) {
+            newSheet = applySheetUpdates(currentSheet, sheetUpdates);
+            finalSheet = newSheet;
             const updateDetails = Object.entries(sheetUpdates).map(([path, value]) => {
                 const formattedPath = path.split('.').map(p => (p.charAt(0).toUpperCase() + p.slice(1)).replace(/([A-Z])/g, ' $1').trim()).join(' > ');
                 const stringValue = String(value);
@@ -134,12 +147,13 @@ export const useGameActions = () => {
             if (questUpdates.add) {
                 const newQuest: Quest = { id: Date.now().toString(), ...questUpdates.add, status: 'active' };
                 newQuests = [newQuest];
+                finalQuests = [...finalQuests, newQuest];
                 messages.push({ sender: 'system', text: `[SYSTEM] New quest added to journal: "${newQuest.title}".` });
             }
             if (questUpdates.update) {
                 const { questTitleToUpdate, ...updates } = questUpdates.update;
                 let questFound = false;
-                const currentQuests = state.quests.map(q => {
+                const currentQuests = finalQuests.map(q => {
                     if (q.title.toLowerCase() === questTitleToUpdate.toLowerCase()) {
                         questFound = true;
                         return { ...q, ...updates };
@@ -148,13 +162,15 @@ export const useGameActions = () => {
                 });
                 if (questFound) {
                     updatedQuests = currentQuests;
+                    finalQuests = currentQuests;
                     const updateStrings = Object.entries(updates).map(([key, value]) => `${key} changed to "${value}"`);
                     messages.push({ sender: 'system', text: `[SYSTEM] Quest "${questTitleToUpdate}" updated: ${updateStrings.join(', ')}.` });
                 }
             }
         }
         dispatch({ type: 'ADD_RESPONSE_MESSAGES', payload: { messages, newSheet, newQuests, updatedQuests, newMap: mapUpdate || undefined } });
-    }, [dispatch, characterSheet, state.quests]);
+        return { updatedSheet: finalSheet, updatedQuests: finalQuests };
+    }, [dispatch]);
 
 
     const handleStartGame = useCallback(async (
@@ -167,7 +183,7 @@ export const useGameActions = () => {
         try {
             const { chat: newChat, initialResponse } = await startAdventure(characterSheetString, dmModel, adventureDetails);
             dispatch({ type: 'START_GAME_INIT', payload: { chat: newChat, sheet: sheetData } });
-            processAdventureResult(initialResponse);
+            processAndDispatchResult(initialResponse, sheetData, []);
         } catch (e) {
             const errorMsg = e instanceof Error ? `Error starting game: ${e.message}` : 'An unknown error occurred.';
             dispatch({ type: 'SET_ERROR', payload: errorMsg });
@@ -175,7 +191,7 @@ export const useGameActions = () => {
         } finally {
             dispatch({ type: 'SET_LOADING', payload: false });
         }
-    }, [dmModel, dispatch, processAdventureResult]);
+    }, [dmModel, dispatch, processAndDispatchResult]);
 
     const handleGenerateAdventureDetails = useCallback(async (difficulty: AdventureDifficulty, sheet: CharacterSheet) => {
         const characterSheetString = formatSheetForPrompt(sheet);
@@ -185,13 +201,60 @@ export const useGameActions = () => {
     const handlePlayerAction = useCallback(async (action: string) => {
         if (!chat || isLoading || !characterSheet) return;
 
-        const newPlayerMessage: GameMessage = { sender: 'player', text: action };
+        let messageToSend = action;
+        if (pendingOocMessage) {
+            messageToSend = `${pendingOocMessage}\n\n${action}`;
+        }
+
+        const newPlayerMessage: GameMessage = { sender: 'player', text: messageToSend };
         dispatch({ type: 'ADD_PLAYER_MESSAGE', payload: newPlayerMessage });
+        
+        if (pendingOocMessage) {
+            dispatch({ type: 'CLEAR_PENDING_OOC_MESSAGE' });
+        }
+
         dispatch({ type: 'SET_LOADING', payload: true });
 
+        let currentAction: string | null = messageToSend;
+        let activeSheet = characterSheet;
+        let activeQuests = quests;
+        let loopCount = 0;
+        const MAX_LOOPS = 5;
+
         try {
-            const result = await continueAdventure(chat, action);
-            processAdventureResult(result);
+            while (currentAction && loopCount < MAX_LOOPS) {
+                loopCount++;
+                const result = await continueAdventure(chat, currentAction);
+                currentAction = null; // Stop the loop unless a dice roll is requested
+
+                const { updatedSheet, updatedQuests } = processAndDispatchResult(result, activeSheet, activeQuests);
+                activeSheet = updatedSheet;
+                activeQuests = updatedQuests;
+
+                if (result.diceRollRequest) {
+                    const { reason, dice, count, modifier } = result.diceRollRequest;
+                    const sides = parseInt(dice.slice(1));
+                    let total = 0;
+                    const rolls = [];
+                    for (let i = 0; i < count; i++) {
+                        const roll = Math.floor(Math.random() * sides) + 1;
+                        rolls.push(roll);
+                        total += roll;
+                    }
+                    total += modifier;
+
+                    const modString = modifier > 0 ? `+${modifier}` : modifier < 0 ? `${modifier}` : '';
+                    const rollBreakdown = rolls.length > 1 || modifier !== 0 ? ` (${rolls.join(' + ')})${modString}` : '';
+                    const systemMessageText = `[SYSTEM] DM rolls for ${reason} (${count}${dice}${modString}): **${total}**${rollBreakdown}`;
+                    
+                    dispatch({ type: 'ADD_RESPONSE_MESSAGES', payload: { messages: [{ sender: 'system', text: systemMessageText }] } });
+
+                    currentAction = `OOC: The dice roll for "${reason}" resulted in a total of ${total}. Narrate the outcome.`;
+                }
+            }
+             if (loopCount >= MAX_LOOPS) {
+                console.warn("Max DM turn loops reached. Breaking to prevent infinite loop.");
+             }
         } catch (e) {
             const errorMsg = e instanceof Error ? `Error getting DM response: ${e.message}` : 'An unknown error occurred.';
             dispatch({ type: 'SET_ERROR', payload: errorMsg });
@@ -200,24 +263,78 @@ export const useGameActions = () => {
         } finally {
             dispatch({ type: 'SET_LOADING', payload: false });
         }
-    }, [chat, isLoading, characterSheet, state.quests, dispatch, processAdventureResult]);
+    }, [chat, isLoading, characterSheet, quests, dispatch, processAndDispatchResult, pendingOocMessage]);
+
+    const handleRollTypeChange = useCallback((newRollType: RollType) => {
+        dispatch({ type: 'SET_ROLL_TYPE', payload: newRollType });
+    }, [dispatch]);
 
     const handleDiceRoll = useCallback((dice: Dice, result: number) => {
-        const action = `Player rolls a ${dice} and gets: ${result}.`;
+        if (dice !== 'd20' || rollType === 'normal') {
+            const action = `Player rolls a ${dice} and gets: ${result}.`;
+            handlePlayerAction(action);
+            return;
+        }
+
+        const roll1 = result;
+        const roll2 = Math.floor(Math.random() * 20) + 1;
+        let finalRoll: number;
+        let actionPrefix = `Player rolls a d20`;
+
+        if (rollType === 'advantage') {
+            finalRoll = Math.max(roll1, roll2);
+            actionPrefix += ' with Advantage';
+        } else { // 'disadvantage'
+            finalRoll = Math.min(roll1, roll2);
+            actionPrefix += ' with Disadvantage';
+        }
+        
+        const action = `${actionPrefix} and gets: ${finalRoll}. (Rolls: ${roll1}, ${roll2})`;
+
+        dispatch({ type: 'SET_ROLL_TYPE', payload: 'normal' });
         handlePlayerAction(action);
-    }, [handlePlayerAction]);
+    }, [handlePlayerAction, rollType, dispatch]);
 
     const handleStatRoll = useCallback(async (name: string, modifier: number) => {
         if (isLoading) return;
-        const roll = Math.floor(Math.random() * 20) + 1;
-        const total = roll + modifier;
-        const modifierString = modifier >= 0 ? `+${modifier}` : `${modifier}`;
-        let resultText = `gets: ${total}`;
-        if (roll === 20) resultText += ' (Critical Success!)';
-        else if (roll === 1) resultText += ' (Critical Failure!)';
-        const action = `Player rolls for a ${name} check and ${resultText}. (Roll: ${roll}, Modifier: ${modifierString})`;
+
+        const roll1 = Math.floor(Math.random() * 20) + 1;
+        let action: string;
+
+        if (rollType === 'normal') {
+            const total = roll1 + modifier;
+            const modifierString = modifier >= 0 ? `+${modifier}` : `${modifier}`;
+            let resultText = `gets: ${total}`;
+            if (roll1 === 20) resultText += ' (Critical Success!)';
+            else if (roll1 === 1) resultText += ' (Critical Failure!)';
+            action = `Player rolls for a ${name} check and ${resultText}. (Roll: ${roll1}, Modifier: ${modifierString})`;
+        } else {
+            const roll2 = Math.floor(Math.random() * 20) + 1;
+            let finalRoll: number;
+            let actionPrefix = `Player rolls for a ${name} check`;
+            
+            if (rollType === 'advantage') {
+                finalRoll = Math.max(roll1, roll2);
+                actionPrefix += ' with Advantage';
+            } else { // disadvantage
+                finalRoll = Math.min(roll1, roll2);
+                actionPrefix += ' with Disadvantage';
+            }
+
+            const total = finalRoll + modifier;
+            const modifierString = modifier >= 0 ? `+${modifier}` : `${modifier}`;
+            let resultText = `gets: ${total}`;
+            if (finalRoll === 20) resultText += ' (Critical Success!)';
+            else if (finalRoll === 1) resultText += ' (Critical Failure!)';
+            
+            const rollDetails = `(Rolls: ${roll1}, ${roll2} -> chose ${finalRoll}, Modifier: ${modifierString})`;
+            action = `${actionPrefix} and ${resultText}. ${rollDetails}`;
+            
+            dispatch({ type: 'SET_ROLL_TYPE', payload: 'normal' });
+        }
+
         handlePlayerAction(action);
-    }, [isLoading, handlePlayerAction]);
+    }, [isLoading, handlePlayerAction, rollType, dispatch]);
 
     const handleSheetSave = useCallback((updatedSheet: CharacterSheet) => {
         if (!characterSheet) return;
@@ -235,19 +352,23 @@ export const useGameActions = () => {
             }).join('\n');
             const oocMessage = `OOC: The player has updated their character sheet with the following changes:\n${formattedChanges}`;
             dispatch({ type: 'UPDATE_SHEET', payload: updatedSheet });
-            setTimeout(() => handlePlayerAction(oocMessage), 0);
+            dispatch({ type: 'SET_PENDING_OOC_MESSAGE', payload: oocMessage });
+            const systemMessage: GameMessage = { sender: 'system', text: `[SYSTEM] Character sheet saved. The DM will see the changes on your next turn.` };
+            dispatch({ type: 'ADD_RESPONSE_MESSAGES', payload: { messages: [systemMessage] } });
         }
-    }, [characterSheet, dispatch, handlePlayerAction]);
+    }, [characterSheet, dispatch]);
 
     const handleNotesSave = useCallback((updatedNotes: PersonalNote[]) => {
-        const originalNotesContent = personalNotes.map(n => n.content).join('\n');
-        const updatedNotesContent = updatedNotes.map(n => n.content).join('\n');
+        const originalNotesContent = personalNotes.map(n => n.content).filter(Boolean).join('\n');
+        const updatedNotesContent = updatedNotes.map(n => n.content).filter(Boolean).join('\n');
         if (originalNotesContent !== updatedNotesContent) {
-            const oocMessage = `OOC: The player has updated their personal notes in their journal.`;
+            const oocMessage = `OOC: [The player's personal notes have been updated. The journal now contains the following notes:\n---\n${updatedNotesContent || '(No notes written.)'}\n---]`;
             dispatch({ type: 'UPDATE_NOTES', payload: updatedNotes });
-            setTimeout(() => handlePlayerAction(oocMessage), 0);
+            dispatch({ type: 'SET_PENDING_OOC_MESSAGE', payload: oocMessage });
+            const systemMessage: GameMessage = { sender: 'system', text: `[SYSTEM] Journal notes saved. The DM will see them on your next turn.` };
+            dispatch({ type: 'ADD_RESPONSE_MESSAGES', payload: { messages: [systemMessage] } });
         }
-    }, [personalNotes, dispatch, handlePlayerAction]);
+    }, [personalNotes, dispatch]);
 
     const handleModelChange = useCallback(async (newModel: DmModel) => {
         if (newModel === dmModel || isLoading || !state.gameStarted || !chat || !characterSheet) return;
@@ -280,6 +401,7 @@ export const useGameActions = () => {
         handleStatRoll,
         handleSheetSave,
         handleNotesSave,
-        handleModelChange
+        handleModelChange,
+        handleRollTypeChange,
     };
 };

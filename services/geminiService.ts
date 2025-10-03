@@ -9,6 +9,21 @@ if (!process.env.API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+const requestDiceRollFunctionDeclaration: FunctionDeclaration = {
+  name: 'requestDiceRoll',
+  description: "Requests an objective dice roll from the game system for an NPC, trap, or other world event. The system will roll the dice and return the result to you for interpretation on the next turn.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      reason: { type: Type.STRING, description: "A brief, clear description of the roll's purpose, e.g., 'Goblin Scimitar Attack', 'Fire Trap Damage', 'Stealth Check for Orc'." },
+      dice: { type: Type.STRING, description: "The type of die to roll, e.g., 'd20', 'd8'." },
+      count: { type: Type.NUMBER, description: "The number of dice to roll. Defaults to 1." },
+      modifier: { type: Type.NUMBER, description: "The modifier to add to the total roll. Can be positive or negative. Defaults to 0." },
+    },
+    required: ['reason', 'dice']
+  }
+};
+
 const updateMapFunctionDeclaration: FunctionDeclaration = {
   name: 'updateMap',
   description: "Updates the 2D visual map of the player's immediate surroundings. This MUST be called on every turn where the player's position or the environment changes.",
@@ -27,6 +42,7 @@ const updateMapFunctionDeclaration: FunctionDeclaration = {
                     x: { type: Type.NUMBER, description: "The zero-indexed x-coordinate, from left to right." },
                     y: { type: Type.NUMBER, description: "The zero-indexed y-coordinate, from top to bottom." },
                     name: { type: Type.STRING, description: "Optional name for the entity, e.g., 'Goblin Shaman' or 'Health Potion'." },
+                    color: { type: Type.STRING, description: "For 'object' type entities only. Optional CSS color name (e.g., 'gold', 'saddlebrown') or hex code (e.g., '#ff0000') to visually distinguish them." },
                 },
                 required: ['type', 'x', 'y']
             }
@@ -128,7 +144,9 @@ Keep your responses concise but descriptive. Use markdown for emphasis (*italic*
 - The map data you provide must be a complete representation of everything the character can see.
 - Provide a full grid, typically around 15x15, to show the area. Include walls, floors (empty space), the player, enemies, items, doors, etc.
 - The player's token should generally be near the center of the map view.
+- For entities of type 'object', you can optionally provide a 'color' property (e.g., 'gold', '#00ff00', 'saddlebrown') to visually distinguish them. For example, a health potion could be 'red', a chest 'saddlebrown', a key 'gold'. If not provided, it will default to yellow.
 - When you use the \`updateMap\` tool, you MUST ALSO describe the scene narratively. The text and the map must be synchronized.
+---
 
 ---
 **ADVENTURE SETUP**
@@ -140,13 +158,21 @@ Keep your responses concise but descriptive. Use markdown for emphasis (*italic*
 ---
 **RESPONSE STYLE**
 - End your responses by setting the scene.
+- **Respect Player Agency:** You control the world, NPCs, and consequences. The player controls their character's actions, thoughts, and dialogue. Never narrate what the player character does or says. Your role is to present situations and describe the outcome of the player's choices.
 - **Do NOT explicitly ask "What do you do?".** Instead, create an open-ended scenario that prompts the player to act. Example: "Before you stands a heavy oak door, slightly ajar, from which you can hear a faint scratching sound."
 ---
 
-**SECOND MOST IMPORTANT RULE: ALWAYS ASK FOR A ROLL**
-- **If the outcome of ANY situation is uncertain, you MUST ask the player to make a dice roll.**
+**SECOND MOST IMPORTANT RULE: ALWAYS ASK FOR A PLAYER ROLL**
+- **If the outcome of a PLAYER's action is uncertain, you MUST ask the player to make a dice roll.**
 - Be specific: "Make a Dexterity (Stealth) check", "Make a Constitution saving throw", etc.
+- **Advantage & Disadvantage:** If circumstances would make a task significantly easier or harder, you MUST specify that the roll should be made with **Advantage** (e.g., trying to surprise a sleeping guard) or **Disadvantage** (e.g., picking a lock in complete darkness).
 - The player will tell you the roll result, and you will narrate the outcome.
+---
+
+**THIRD MOST IMPORTANT RULE: REQUESTING DM ROLLS**
+- When an NPC, monster, trap, or any other world event requires a dice roll to determine an outcome (like an attack, a saving throw, or damage), you MUST use the \`requestDiceRoll\` tool.
+- You must provide a clear \`reason\` for the roll.
+- After you call this tool, the system will perform the roll and provide the result back to you. You MUST then use that specific result to narrate the outcome.
 ---
 
 The player's character sheet is provided below.
@@ -160,8 +186,9 @@ GAME MECHANICS & TOOLS:
 You have tools to modify the game state. When you use a tool, you MUST also describe the changes in your narrative response.
 
 1.  **\`updateMap\`**: (See first rule) You MUST use this every turn to update the visual map.
-2.  **\`updateCharacterSheet\`**: Use when a player's health, items, money, or stats change. For list-like fields (e.g., 'equipment.list'), provide the complete new string.
-3.  **\`addQuest\` & \`updateQuest\`**: Use these to manage the player's quest journal.
+2.  **\`requestDiceRoll\`**: (See third rule) You MUST use this for all DM-initiated rolls.
+3.  **\`updateCharacterSheet\`**: Use when a player's health, items, money, or stats change. For list-like fields (e.g., 'equipment.list'), provide the complete new string.
+4.  **\`addQuest\` & \`updateQuest\`**: Use these to manage the player's quest journal.
 ---
 
 Now, begin the adventure in the world of ${adventureDetails.worldName}. Describe the opening scene, present the first situation, and, most importantly, provide the initial map by calling the \`updateMap\` tool.
@@ -290,6 +317,7 @@ export interface AdventureResult {
         update?: { questTitleToUpdate: string; newTitle?: string; newDescription?: string; newStatus?: QuestStatus };
     } | null;
     mapUpdate: MapState | null;
+    diceRollRequest: { reason: string; dice: string; count: number; modifier: number; } | null;
 }
 
 const parseAdventureResultFromResponse = (response: GenerateContentResponse): AdventureResult => {
@@ -297,6 +325,7 @@ const parseAdventureResultFromResponse = (response: GenerateContentResponse): Ad
     let sheetUpdates: Record<string, any> | null = null;
     let questUpdates: AdventureResult['questUpdates'] = null;
     let mapUpdate: MapState | null = null;
+    let diceRollRequest: AdventureResult['diceRollRequest'] = null;
 
     if (response.candidates?.[0]?.content?.parts) {
         for (const part of response.candidates[0].content.parts) {
@@ -324,11 +353,18 @@ const parseAdventureResultFromResponse = (response: GenerateContentResponse): Ad
                     if (!questUpdates) questUpdates = {};
                     const updates = Object.fromEntries(Object.entries(fc.args).filter(([, v]) => v !== undefined));
                     questUpdates.update = updates as { questTitleToUpdate: string; newTitle?: string; newDescription?: string; newStatus?: QuestStatus };
+                } else if (fc.name === 'requestDiceRoll') {
+                    diceRollRequest = {
+                        reason: fc.args.reason as string,
+                        dice: fc.args.dice as string,
+                        count: (fc.args.count as number) || 1,
+                        modifier: (fc.args.modifier as number) || 0,
+                    };
                 }
             }
         }
     }
-    return { text, sheetUpdates, questUpdates, mapUpdate };
+    return { text, sheetUpdates, questUpdates, mapUpdate, diceRollRequest };
 };
 
 
@@ -343,27 +379,37 @@ export const startAdventure = async (
             updateMapFunctionDeclaration,
             updateCharacterSheetFunctionDeclaration,
             addQuestFunctionDeclaration,
-            updateQuestFunctionDeclaration
+            updateQuestFunctionDeclaration,
+            requestDiceRollFunctionDeclaration
         ] }];
         
-        const firstUserContent: Content = {role: 'user', parts: [{text: "I am ready to begin."}]};
+        const firstUserMessage = "I am ready to begin.";
 
+        // Use generateContent for the first turn to ensure a robust start.
         const firstTurnResponse = await ai.models.generateContent({
             model: model,
-            contents: [firstUserContent],
+            contents: firstUserMessage,
             config: {
                 systemInstruction: systemInstruction,
                 tools: tools,
             },
         });
-
+        
+        // Parse the initial response from the model.
         const initialResponse = parseAdventureResultFromResponse(firstTurnResponse);
         
-        const history: Content[] = [firstUserContent];
-        if (firstTurnResponse.candidates?.[0]?.content) {
-            history.push(firstTurnResponse.candidates[0].content);
+        if (!firstTurnResponse.candidates?.[0]?.content) {
+             throw new Error("The AI Dungeon Master failed to generate an initial response. This might be due to a content safety filter.");
         }
+        
+        const modelResponseContent = firstTurnResponse.candidates[0].content;
 
+        // Create the chat session with the history of the first turn.
+        const history: Content[] = [
+            { role: 'user', parts: [{ text: firstUserMessage }] },
+            modelResponseContent
+        ];
+        
         const chat = ai.chats.create({
             model: model,
             history: history,
@@ -377,7 +423,10 @@ export const startAdventure = async (
 
     } catch (error) {
         console.error("Gemini API error in startAdventure:", error);
-        throw new Error("Failed to start the adventure with the AI Dungeon Master.");
+        if (error instanceof Error && error.message.includes('SAFETY')) {
+             throw new Error("The adventure could not be started due to the safety settings. Please adjust your character or world details and try again.");
+        }
+        throw new Error(`"Gemini API error in startAdventure:" "${error instanceof Error ? error.message : String(error)}"`);
     }
 };
 
@@ -396,7 +445,8 @@ export const restartAdventureWithNewModel = async (
                     updateMapFunctionDeclaration,
                     updateCharacterSheetFunctionDeclaration,
                     addQuestFunctionDeclaration,
-                    updateQuestFunctionDeclaration
+                    updateQuestFunctionDeclaration,
+                    requestDiceRollFunctionDeclaration
                 ] }],
             },
         });
