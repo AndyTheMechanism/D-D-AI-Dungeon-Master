@@ -1,11 +1,40 @@
-import { GoogleGenAI, Chat, Type, FunctionDeclaration, Content } from "@google/genai";
-import type { CharacterSheet, QuestStatus, AdventureDifficulty } from "../types";
+import { GoogleGenAI, Chat, Type, FunctionDeclaration, Content, GenerateContentResponse } from "@google/genai";
+import type { CharacterSheet, QuestStatus, AdventureDifficulty, MapState } from "../types";
+import { v4 as uuidv4 } from 'uuid';
+
 
 if (!process.env.API_KEY) {
     throw new Error("API_KEY environment variable not set");
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+const updateMapFunctionDeclaration: FunctionDeclaration = {
+  name: 'updateMap',
+  description: "Updates the 2D visual map of the player's immediate surroundings. This MUST be called on every turn where the player's position or the environment changes.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+        width: { type: Type.NUMBER, description: "The width of the map grid, e.g., 15." },
+        height: { type: Type.NUMBER, description: "The height of the map grid, e.g., 15." },
+        entities: {
+            type: Type.ARRAY,
+            description: "A complete list of all visible entities on the map.",
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    type: { type: Type.STRING, description: "Entity type. Must be one of: 'player', 'wall', 'enemy', 'object', 'door'." },
+                    x: { type: Type.NUMBER, description: "The zero-indexed x-coordinate, from left to right." },
+                    y: { type: Type.NUMBER, description: "The zero-indexed y-coordinate, from top to bottom." },
+                    name: { type: Type.STRING, description: "Optional name for the entity, e.g., 'Goblin Shaman' or 'Health Potion'." },
+                },
+                required: ['type', 'x', 'y']
+            }
+        }
+    },
+    required: ['width', 'height', 'entities']
+  }
+};
 
 const updateCharacterSheetFunctionDeclaration: FunctionDeclaration = {
   name: 'updateCharacterSheet',
@@ -87,33 +116,40 @@ const getInitialPrompt = (
     characterSheetContent: string,
     adventureDetails: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string }
 ): string => `
-You are the Dungeon Master (DM) for a text-based role-playing game based on Dungeons & Dragons 5th Edition rules. Your name is 'Gemini'.
+You are the Dungeon Master (DM) for a text-based role-playing game with a 2D visual map, based on Dungeons & Dragons 5th Edition rules. Your name is 'Gemini'.
 Your goal is to create a rich, engaging, and challenging fantasy adventure.
-You will describe the world, the non-player characters (NPCs), and the situations the player finds themselves in.
-You must react to the player's actions and describe the consequences.
-Keep your responses concise but descriptive. Use markdown for emphasis where appropriate (e.g., *italic* for thoughts, **bold** for important names or items).
+You will describe the world, NPCs, and situations. You must react to the player's actions and describe the consequences.
+Keep your responses concise but descriptive. Use markdown for emphasis (*italic*, **bold**).
+
+---
+**THE MAP: THE MOST IMPORTANT RULE**
+- You MUST manage a 2D grid map of the player's immediate surroundings. The top-left corner is coordinate (0, 0).
+- **On EVERY turn where the player's position or their surroundings change, you MUST call the \`updateMap\` function.**
+- The map data you provide must be a complete representation of everything the character can see.
+- Provide a full grid, typically around 15x15, to show the area. Include walls, floors (empty space), the player, enemies, items, doors, etc.
+- The player's token should generally be near the center of the map view.
+- When you use the \`updateMap\` tool, you MUST ALSO describe the scene narratively. The text and the map must be synchronized.
 
 ---
 **ADVENTURE SETUP**
 - World Name: ${adventureDetails.worldName || 'A new world'}
-- Difficulty: ${adventureDetails.difficulty}. You must tailor the challenges, NPC attitudes, and overall stakes to this level. 'Easy' should be forgiving. 'Hardcore' should be brutal and unforgiving.
+- Difficulty: ${adventureDetails.difficulty}. Tailor challenges to this level.
 - Additional Details: ${adventureDetails.additionalInfo || 'No additional details provided.'}
 ---
 
 ---
 **RESPONSE STYLE**
-- End your responses by setting the scene and presenting a situation.
-- **Crucially, do NOT explicitly ask "What do you do?", "What's your next move?", or similar direct questions.** Instead, create an open-ended scenario that implicitly prompts the player to act. For example, instead of "You see a door. What do you do?", describe it: "Before you stands a heavy oak door, slightly ajar, from which you can hear a faint scratching sound." This encourages the player to take initiative.
+- End your responses by setting the scene.
+- **Do NOT explicitly ask "What do you do?".** Instead, create an open-ended scenario that prompts the player to act. Example: "Before you stands a heavy oak door, slightly ajar, from which you can hear a faint scratching sound."
 ---
 
-**THE MOST IMPORTANT RULE: ALWAYS ASK FOR A ROLL**
-- **If the outcome of ANY situation is uncertain, you MUST ask the player to make a dice roll.** This applies to actions initiated by the player (e.g., "I try to persuade the guard") and situations you present (e.g., "A trap springs from the floor!").
-- Do not determine the outcome yourself if there is any chance of failure or partial success.
-- When you call for a roll, be specific. Ask for a specific skill check (e.g., "Make a Dexterity (Stealth) check"), a saving throw (e.g., "Make a Constitution saving throw"), an attack roll, or a simple die roll for chance (e.g., "Roll a d6 to see what happens," or "Flip a coin (roll a d2)").
-- The player will tell you the result of their roll, and you must then narrate the outcome based on that result and their character's abilities.
+**SECOND MOST IMPORTANT RULE: ALWAYS ASK FOR A ROLL**
+- **If the outcome of ANY situation is uncertain, you MUST ask the player to make a dice roll.**
+- Be specific: "Make a Dexterity (Stealth) check", "Make a Constitution saving throw", etc.
+- The player will tell you the roll result, and you will narrate the outcome.
 ---
 
-The player's character sheet is provided below. Use this information to tailor the adventure and determine the success or failure of their actions.
+The player's character sheet is provided below.
 ---
 CHARACTER SHEET:
 ${characterSheetContent}
@@ -121,23 +157,14 @@ ${characterSheetContent}
 
 ---
 GAME MECHANICS & TOOLS:
-You have a set of tools to directly modify the game state. When you use a tool, you MUST also describe the changes in your narrative response to the player.
+You have tools to modify the game state. When you use a tool, you MUST also describe the changes in your narrative response.
 
-1.  **'updateCharacterSheet'**:
-    -   When a player's health changes, they gain or lose items or money, or their stats are affected by game events, you MUST call this function with the updated values.
-    -   IMPORTANT: For text fields that contain lists (like inventory, languages, features), you must update the *entire field* with a new string.
-      -   To add/remove items, update the 'equipment.list' field. Example: if 'equipment.list' is "a rope" and the player finds a potion, you must call the tool with path 'equipment.list' and value "a rope, a healing potion".
-      -   You MUST read the character sheet and chat history to know the current value of the field before modifying it to include both old and new information.
-    -   Example narrative: After calling the tool to set \`combat.hitPoints.current\` to '15', you should also say, "The goblin's blade slashes your arm, dealing 5 damage."
-
-2.  **'addQuest' & 'updateQuest'**:
-    -   You MUST use these tools to manage the player's quest journal.
-    -   Use 'addQuest' when a new objective is given to the player.
-    -   Use 'updateQuest' when a quest objective changes, or its status becomes 'completed' or 'failed'.
-    -   Example narrative: After calling 'addQuest', you could say, "The old woman's plea is heartfelt. Your journal has been updated with a new quest."
+1.  **\`updateMap\`**: (See first rule) You MUST use this every turn to update the visual map.
+2.  **\`updateCharacterSheet\`**: Use when a player's health, items, money, or stats change. For list-like fields (e.g., 'equipment.list'), provide the complete new string.
+3.  **\`addQuest\` & \`updateQuest\`**: Use these to manage the player's quest journal.
 ---
 
-Now, begin the adventure in the world of ${adventureDetails.worldName}. Take inspiration from the provided details and the character sheet. Describe the opening scene and present the first situation to the player, following all the rules above.
+Now, begin the adventure in the world of ${adventureDetails.worldName}. Describe the opening scene, present the first situation, and, most importantly, provide the initial map by calling the \`updateMap\` tool.
 `;
 
 const getParsePrompt = (characterSheetContent: string): string => `
@@ -254,36 +281,99 @@ const characterSheetSchema = {
     },
 };
 
+
+export interface AdventureResult {
+    text: string;
+    sheetUpdates: Record<string, any> | null;
+    questUpdates: {
+        add?: { title: string; description: string };
+        update?: { questTitleToUpdate: string; newTitle?: string; newDescription?: string; newStatus?: QuestStatus };
+    } | null;
+    mapUpdate: MapState | null;
+}
+
+const parseAdventureResultFromResponse = (response: GenerateContentResponse): AdventureResult => {
+    let text = "";
+    let sheetUpdates: Record<string, any> | null = null;
+    let questUpdates: AdventureResult['questUpdates'] = null;
+    let mapUpdate: MapState | null = null;
+
+    if (response.candidates?.[0]?.content?.parts) {
+        for (const part of response.candidates[0].content.parts) {
+            if (part.text) {
+                text += part.text;
+            } else if (part.functionCall) {
+                const fc = part.functionCall;
+                if (fc.name === 'updateMap') {
+                     mapUpdate = {
+                        width: fc.args.width as number,
+                        height: fc.args.height as number,
+                        entities: (fc.args.entities as any[]).map(e => ({ ...e, id: uuidv4() }))
+                    };
+                } else if (fc.name === 'updateCharacterSheet' && Array.isArray(fc.args.updates)) {
+                    if (!sheetUpdates) sheetUpdates = {};
+                    for (const update of fc.args.updates) {
+                        if (update.path && update.value !== undefined) {
+                            sheetUpdates[update.path] = update.value;
+                        }
+                    }
+                } else if (fc.name === 'addQuest') {
+                    if (!questUpdates) questUpdates = {};
+                    questUpdates.add = { title: fc.args.title as string, description: fc.args.description as string };
+                } else if (fc.name === 'updateQuest') {
+                    if (!questUpdates) questUpdates = {};
+                    const updates = Object.fromEntries(Object.entries(fc.args).filter(([, v]) => v !== undefined));
+                    questUpdates.update = updates as { questTitleToUpdate: string; newTitle?: string; newDescription?: string; newStatus?: QuestStatus };
+                }
+            }
+        }
+    }
+    return { text, sheetUpdates, questUpdates, mapUpdate };
+};
+
+
 export const startAdventure = async (
     characterSheet: string,
     model: string,
     adventureDetails: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string }
-): Promise<{ chat: Chat, openingMessage: string }> => {
+): Promise<{ chat: Chat, initialResponse: AdventureResult }> => {
     try {
-        const chat = ai.chats.create({
+        const systemInstruction = getInitialPrompt(characterSheet, adventureDetails);
+        const tools = [{ functionDeclarations: [
+            updateMapFunctionDeclaration,
+            updateCharacterSheetFunctionDeclaration,
+            addQuestFunctionDeclaration,
+            updateQuestFunctionDeclaration
+        ] }];
+        
+        const firstUserContent: Content = {role: 'user', parts: [{text: "I am ready to begin."}]};
+
+        const firstTurnResponse = await ai.models.generateContent({
             model: model,
+            contents: [firstUserContent],
             config: {
-                systemInstruction: getInitialPrompt(characterSheet, adventureDetails),
-                tools: [{ functionDeclarations: [
-                    updateCharacterSheetFunctionDeclaration,
-                    addQuestFunctionDeclaration,
-                    updateQuestFunctionDeclaration
-                ] }],
+                systemInstruction: systemInstruction,
+                tools: tools,
             },
         });
 
-        const response = await chat.sendMessage({ message: "I am ready to begin." });
+        const initialResponse = parseAdventureResultFromResponse(firstTurnResponse);
         
-        let openingMessage = "";
-        if (response.candidates?.[0]?.content?.parts) {
-            for (const part of response.candidates[0].content.parts) {
-                if (part.text) {
-                    openingMessage += part.text;
-                }
-            }
+        const history: Content[] = [firstUserContent];
+        if (firstTurnResponse.candidates?.[0]?.content) {
+            history.push(firstTurnResponse.candidates[0].content);
         }
-        
-        return { chat, openingMessage };
+
+        const chat = ai.chats.create({
+            model: model,
+            history: history,
+            config: {
+                systemInstruction: systemInstruction,
+                tools: tools,
+            },
+        });
+
+        return { chat, initialResponse };
 
     } catch (error) {
         console.error("Gemini API error in startAdventure:", error);
@@ -303,6 +393,7 @@ export const restartAdventureWithNewModel = async (
             config: {
                 systemInstruction: getInitialPrompt(characterSheet, { difficulty: 'Medium', worldName: 'the game world', additionalInfo: 'The world is in a state of flux.' }), // Note: A generic prompt is used on restart
                 tools: [{ functionDeclarations: [
+                    updateMapFunctionDeclaration,
                     updateCharacterSheetFunctionDeclaration,
                     addQuestFunctionDeclaration,
                     updateQuestFunctionDeclaration
@@ -316,51 +407,11 @@ export const restartAdventureWithNewModel = async (
     }
 };
 
-interface AdventureResult {
-    text: string;
-    sheetUpdates: Record<string, any> | null;
-    questUpdates: {
-        add?: { title: string; description: string };
-        update?: { questTitleToUpdate: string; newTitle?: string; newDescription?: string; newStatus?: QuestStatus };
-    } | null;
-}
 
 export const continueAdventure = async (chat: Chat, playerAction: string): Promise<AdventureResult> => {
     try {
         const response = await chat.sendMessage({ message: playerAction });
-        let text = "";
-        let sheetUpdates: Record<string, any> | null = null;
-        let questUpdates: AdventureResult['questUpdates'] = null;
-
-        if (response.candidates?.[0]?.content?.parts) {
-            for (const part of response.candidates[0].content.parts) {
-                if (part.text) {
-                    text += part.text;
-                } else if (part.functionCall) {
-                    const fc = part.functionCall;
-                    if (fc.name === 'updateCharacterSheet' && Array.isArray(fc.args.updates)) {
-                        if (!sheetUpdates) sheetUpdates = {};
-                        for (const update of fc.args.updates) {
-                            if (update.path && update.value !== undefined) {
-                                sheetUpdates[update.path] = update.value;
-                            }
-                        }
-                    } else if (fc.name === 'addQuest') {
-                        if (!questUpdates) questUpdates = {};
-                        // FIX: Cast `unknown` function call arguments to their expected `string` types.
-                        questUpdates.add = { title: fc.args.title as string, description: fc.args.description as string };
-                    } else if (fc.name === 'updateQuest') {
-                        if (!questUpdates) questUpdates = {};
-                        // Filter out undefined optional values
-                        const updates = Object.fromEntries(Object.entries(fc.args).filter(([, v]) => v !== undefined));
-                        // FIX: Cast the `updates` object to the correct type to resolve the 'unknown' to 'string' assignment error.
-                        questUpdates.update = updates as { questTitleToUpdate: string; newTitle?: string; newDescription?: string; newStatus?: QuestStatus };
-                    }
-                }
-            }
-        }
-
-        return { text, sheetUpdates, questUpdates };
+        return parseAdventureResultFromResponse(response);
     } catch (error) {
         console.error("Gemini API error in continueAdventure:", error);
         throw new Error("The AI Dungeon Master is currently unavailable.");
@@ -410,7 +461,6 @@ export const generateAdventureDetails = async (
         const jsonString = response.text.trim();
         const parsedData = JSON.parse(jsonString);
         return parsedData;
-
     } catch (error) {
         console.error("Gemini API error in generateAdventureDetails:", error);
         throw new Error("The AI failed to generate adventure details. Please try again or fill them in manually.");

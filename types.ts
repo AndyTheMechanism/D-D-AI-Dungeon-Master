@@ -23,6 +23,22 @@ export interface PersonalNote {
   content: string;
 }
 
+export type EntityType = 'player' | 'wall' | 'enemy' | 'object' | 'door' | 'floor';
+
+export interface MapEntity {
+  id: string;
+  type: EntityType;
+  x: number;
+  y: number;
+  name?: string;
+}
+
+export interface MapState {
+  entities: MapEntity[];
+  width: number;
+  height: number;
+}
+
 export interface CharacterSheet {
   coreIdentity: {
     characterName: string;
