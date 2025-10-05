@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useGameState, useGameDispatch } from '../context/GameContext';
 import { startAdventure, continueAdventure, restartAdventureWithNewModel, generateAdventureDetails } from '../services/geminiService';
-import { CharacterSheet, Dice, DmModel, GameMessage, PersonalNote, Quest, AdventureDifficulty, RollType } from '../types';
+import { CharacterSheet, Dice, DmModel, GameMessage, PersonalNote, Quest, AdventureDifficulty, RollType, ThematicTone, AdventureDetails, SaveData } from '../types';
 import { AdventureResult } from '../services/geminiService';
 
 // Helper functions (previously in App.tsx)
@@ -111,7 +111,7 @@ const findChanges = (original: any, updated: any, path: string = ''): Record<str
 export const useGameActions = () => {
     const state = useGameState();
     const dispatch = useGameDispatch();
-    const { chat, isLoading, characterSheet, personalNotes, dmModel, quests, pendingOocMessage, rollType } = state;
+    const { chat, isLoading, characterSheet, personalNotes, dmModel, quests, pendingOocMessage, rollType, adventureDetails, gameLog } = state;
 
     const processAndDispatchResult = useCallback((
         result: AdventureResult,
@@ -175,14 +175,14 @@ export const useGameActions = () => {
 
     const handleStartGame = useCallback(async (
         sheetData: CharacterSheet,
-        adventureDetails: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string }
+        adventureDetailsPayload: AdventureDetails
     ) => {
         dispatch({ type: 'SET_LOADING', payload: true });
         const characterSheetString = formatSheetForPrompt(sheetData);
 
         try {
-            const { chat: newChat, initialResponse } = await startAdventure(characterSheetString, dmModel, adventureDetails);
-            dispatch({ type: 'START_GAME_INIT', payload: { chat: newChat, sheet: sheetData } });
+            const { chat: newChat, initialResponse } = await startAdventure(characterSheetString, dmModel, adventureDetailsPayload);
+            dispatch({ type: 'START_GAME_INIT', payload: { chat: newChat, sheet: sheetData, adventureDetails: adventureDetailsPayload } });
             processAndDispatchResult(initialResponse, sheetData, []);
         } catch (e) {
             const errorMsg = e instanceof Error ? `Error starting game: ${e.message}` : 'An unknown error occurred.';
@@ -198,15 +198,40 @@ export const useGameActions = () => {
         return await generateAdventureDetails(difficulty, characterSheetString);
     }, []);
 
-    const handlePlayerAction = useCallback(async (action: string) => {
+    const handlePlayerAction = useCallback(async (action: string, attachment?: { data: string; mimeType: string; name: string }) => {
         if (!chat || isLoading || !characterSheet) return;
 
-        let messageToSend = action;
+        const userMessageParts: any[] = [];
+        if (attachment) {
+            userMessageParts.push({
+                inlineData: { mimeType: attachment.mimeType, data: attachment.data }
+            });
+        }
+        if (action) {
+            userMessageParts.push({ text: action });
+        }
+        if (userMessageParts.length === 0) return;
+
         if (pendingOocMessage) {
-            messageToSend = `${pendingOocMessage}\n\n${action}`;
+            const textPartIndex = userMessageParts.findIndex(p => 'text' in p);
+            if (textPartIndex > -1) {
+                userMessageParts[textPartIndex].text = `${pendingOocMessage}\n\n${userMessageParts[textPartIndex].text}`;
+            } else {
+                userMessageParts.unshift({ text: pendingOocMessage });
+            }
         }
 
-        const newPlayerMessage: GameMessage = { sender: 'player', text: messageToSend };
+        let logText = action;
+        let imageUrl: string | undefined;
+        let attachmentName: string | undefined;
+
+        if (attachment) {
+            logText = `[Attached: ${attachment.name}] ${action || ''}`.trim();
+            imageUrl = `data:${attachment.mimeType};base64,${attachment.data}`;
+            attachmentName = attachment.name;
+        }
+
+        const newPlayerMessage: GameMessage = { sender: 'player', text: logText, imageUrl, attachmentName };
         dispatch({ type: 'ADD_PLAYER_MESSAGE', payload: newPlayerMessage });
         
         if (pendingOocMessage) {
@@ -215,7 +240,11 @@ export const useGameActions = () => {
 
         dispatch({ type: 'SET_LOADING', payload: true });
 
-        let currentAction: string | null = messageToSend;
+        const messagePayload = userMessageParts.length === 1 && userMessageParts[0].text
+            ? userMessageParts[0].text
+            : userMessageParts;
+
+        let currentAction: string | any[] | null = messagePayload;
         let activeSheet = characterSheet;
         let activeQuests = quests;
         let loopCount = 0;
@@ -225,7 +254,7 @@ export const useGameActions = () => {
             while (currentAction && loopCount < MAX_LOOPS) {
                 loopCount++;
                 const result = await continueAdventure(chat, currentAction);
-                currentAction = null; // Stop the loop unless a dice roll is requested
+                currentAction = null;
 
                 const { updatedSheet, updatedQuests } = processAndDispatchResult(result, activeSheet, activeQuests);
                 activeSheet = updatedSheet;
@@ -371,7 +400,7 @@ export const useGameActions = () => {
     }, [personalNotes, dispatch]);
 
     const handleModelChange = useCallback(async (newModel: DmModel) => {
-        if (newModel === dmModel || isLoading || !state.gameStarted || !chat || !characterSheet) return;
+        if (newModel === dmModel || isLoading || !state.gameStarted || !chat || !characterSheet || !adventureDetails) return;
 
         const oldModel = dmModel;
         dispatch({ type: 'SET_MODEL', payload: newModel });
@@ -380,7 +409,7 @@ export const useGameActions = () => {
         try {
             const history = await chat.getHistory();
             const characterSheetString = formatSheetForPrompt(characterSheet);
-            const { chat: newChat } = await restartAdventureWithNewModel(characterSheetString, newModel, history);
+            const { chat: newChat } = await restartAdventureWithNewModel(characterSheetString, newModel, history, adventureDetails);
             dispatch({ type: 'SET_CHAT', payload: newChat });
             const systemMessage: GameMessage = { sender: 'system', text: `[SYSTEM] Dungeon Master model has been switched to ${newModel}.` };
             dispatch({ type: 'ADD_RESPONSE_MESSAGES', payload: { messages: [systemMessage] } });
@@ -391,7 +420,70 @@ export const useGameActions = () => {
         } finally {
             dispatch({ type: 'SET_LOADING', payload: false });
         }
-    }, [dmModel, isLoading, state.gameStarted, chat, characterSheet, dispatch]);
+    }, [dmModel, isLoading, state.gameStarted, chat, characterSheet, dispatch, adventureDetails]);
+
+    const handleSaveGame = useCallback(async () => {
+        if (!characterSheet || !adventureDetails || !chat) {
+            throw new Error("Cannot save game, essential data is missing.");
+        }
+
+        const history = await chat.getHistory();
+
+        const saveData: SaveData = {
+            version: "1.0.0",
+            savedAt: new Date().toISOString(),
+            characterSheet,
+            quests,
+            personalNotes,
+            mapState: state.mapState,
+            dmModel,
+            chatHistory: history,
+            gameLog: state.gameLog,
+            adventureDetails,
+            rollType,
+        };
+
+        const jsonString = JSON.stringify(saveData, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const characterName = characterSheet.coreIdentity.characterName.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'character';
+        a.href = url;
+        a.download = `dnd-ai-save-${characterName}-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+    }, [characterSheet, quests, personalNotes, state.mapState, dmModel, chat, state.gameLog, adventureDetails, rollType]);
+
+    const handleLoadGame = useCallback(async (fileContent: string) => {
+        dispatch({ type: 'SET_LOADING', payload: true });
+        try {
+            const saveData: SaveData = JSON.parse(fileContent);
+
+            // Basic validation
+            if (!saveData.version || !saveData.characterSheet || !saveData.chatHistory || !saveData.adventureDetails) {
+                throw new Error("Invalid or corrupted save file.");
+            }
+
+            const characterSheetString = formatSheetForPrompt(saveData.characterSheet);
+            const { chat: newChat } = await restartAdventureWithNewModel(
+                characterSheetString,
+                saveData.dmModel,
+                saveData.chatHistory,
+                saveData.adventureDetails
+            );
+            
+            dispatch({ type: 'LOAD_GAME', payload: { ...saveData, chat: newChat }});
+
+        } catch (e) {
+            const errorMsg = e instanceof Error ? `Error loading game: ${e.message}` : 'An unknown error occurred while loading.';
+            dispatch({ type: 'SET_ERROR', payload: errorMsg });
+             dispatch({ type: 'SET_LOADING', payload: false });
+            console.error(e);
+        }
+    }, [dispatch]);
 
     return {
         handleStartGame,
@@ -403,5 +495,7 @@ export const useGameActions = () => {
         handleNotesSave,
         handleModelChange,
         handleRollTypeChange,
+        handleSaveGame,
+        handleLoadGame,
     };
 };

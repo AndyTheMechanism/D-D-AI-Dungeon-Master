@@ -5,9 +5,10 @@ interface GameLogProps {
   log: GameMessage[];
   isLoading: boolean;
   onTextSelect: (text: string) => void;
+  onImageClick: (url: string) => void;
 }
 
-const GameLog: React.FC<GameLogProps> = ({ log, isLoading, onTextSelect }) => {
+const GameLog: React.FC<GameLogProps> = ({ log, isLoading, onTextSelect, onImageClick }) => {
   const endOfLogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -98,7 +99,19 @@ const GameLog: React.FC<GameLogProps> = ({ log, isLoading, onTextSelect }) => {
               >
                 {message.sender === 'dm'
                   ? renderFormattedText(message.text)
-                  : <p className="whitespace-pre-wrap leading-relaxed font-roboto-condensed text-lg">{message.text}</p>
+                  : (
+                    <>
+                      {message.imageUrl && (
+                        <img
+                          src={message.imageUrl}
+                          alt={message.attachmentName || 'Attached image'}
+                          className="max-w-full h-auto rounded-md mb-2 border border-red-800 hover:opacity-80 transition-opacity cursor-pointer"
+                          onClick={() => message.imageUrl && onImageClick(message.imageUrl)}
+                        />
+                      )}
+                      <p className="whitespace-pre-wrap leading-relaxed font-roboto-condensed text-lg">{message.text}</p>
+                    </>
+                  )
                 }
               </div>
             </div>

@@ -1,6 +1,10 @@
+import type { Content } from "@google/genai";
+
 export interface GameMessage {
   sender: 'player' | 'dm' | 'system';
   text: string;
+  imageUrl?: string;
+  attachmentName?: string;
 }
 
 export type Dice = 'd2' | 'd4' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20' | 'd100';
@@ -8,6 +12,8 @@ export type Dice = 'd2' | 'd4' | 'd6' | 'd8' | 'd10' | 'd12' | 'd20' | 'd100';
 export type DmModel = 'gemini-2.5-flash' | 'gemini-2.5-pro';
 
 export type AdventureDifficulty = 'Easy' | 'Medium' | 'Hard' | 'Hardcore';
+
+export type ThematicTone = 'Heroic Fantasy' | 'Gritty Realism' | 'Unrestricted';
 
 export type RollType = 'normal' | 'advantage' | 'disadvantage';
 
@@ -41,6 +47,28 @@ export interface MapState {
   width: number;
   height: number;
 }
+
+export interface AdventureDetails {
+  difficulty: AdventureDifficulty;
+  worldName: string;
+  additionalInfo: string;
+  tone: ThematicTone;
+}
+
+export interface SaveData {
+  version: string;
+  savedAt: string;
+  characterSheet: CharacterSheet;
+  quests: Quest[];
+  personalNotes: PersonalNote[];
+  mapState: MapState | null;
+  dmModel: DmModel;
+  chatHistory: Content[];
+  gameLog: GameMessage[];
+  adventureDetails: AdventureDetails;
+  rollType: RollType;
+}
+
 
 export interface CharacterSheet {
   coreIdentity: {

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { CharacterSheet, PersonalNote, AdventureDifficulty } from './types';
+import { CharacterSheet, PersonalNote, AdventureDifficulty, ThematicTone, AdventureDetails } from './types';
 import { useGameState } from './context/GameContext';
 import { useGameActions } from './hooks/useGameActions';
 import GameLog from './components/GameLog';
@@ -16,6 +16,9 @@ import AdventureSetupModal from './components/AdventureSetupModal';
 import StartingGameLoader from './components/StartingGameLoader';
 import MapView from './components/MapView';
 import RollTypeSelector from './components/RollTypeSelector';
+import SettingsIcon from './components/icons/SettingsIcon';
+import SettingsModal from './components/SettingsModal';
+import ImageModal from './components/ImageModal';
 
 const App: React.FC = () => {
   const {
@@ -41,14 +44,18 @@ const App: React.FC = () => {
     handleNotesSave,
     handleModelChange,
     handleRollTypeChange,
+    handleSaveGame,
+    handleLoadGame,
   } = useGameActions();
 
   // Local UI state (modals, selections, etc.)
   const [isSheetVisible, setIsSheetVisible] = useState<boolean>(false);
   const [isJournalVisible, setIsJournalVisible] = useState<boolean>(false);
+  const [isSettingsVisible, setIsSettingsVisible] = useState<boolean>(false);
   const [isAdventureSetupVisible, setIsAdventureSetupVisible] = useState<boolean>(false);
   const [pendingCharacterSheet, setPendingCharacterSheet] = useState<CharacterSheet | null>(null);
   const [selectedText, setSelectedText] = useState<string>('');
+  const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
   
   const handleCharacterFinalized = useCallback((sheetData: CharacterSheet) => {
     setPendingCharacterSheet(sheetData);
@@ -57,7 +64,7 @@ const App: React.FC = () => {
 
   const handleStartGameAndCloseModal = useCallback(async (
     sheetData: CharacterSheet, 
-    adventureDetails: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string }
+    adventureDetails: AdventureDetails
   ) => {
     setIsAdventureSetupVisible(false);
     await handleStartGame(sheetData, adventureDetails);
@@ -69,6 +76,10 @@ const App: React.FC = () => {
     }
     return await handleGenerateAdventureDetails(difficulty, pendingCharacterSheet);
   }, [pendingCharacterSheet, handleGenerateAdventureDetails]);
+
+  const handleLoadGameAndCloseModal = useCallback(async (fileContent: string) => {
+    await handleLoadGame(fileContent);
+  }, [handleLoadGame]);
 
 
   const handleStatRollAndCloseModal = useCallback((name: string, modifier: number) => {
@@ -123,7 +134,7 @@ const App: React.FC = () => {
         {isLoading && !gameStarted ? (
           <StartingGameLoader />
         ) : !gameStarted ? (
-           <CharacterCreation onCharacterFinalized={handleCharacterFinalized} isProcessing={isLoading} />
+           <CharacterCreation onCharacterFinalized={handleCharacterFinalized} isProcessing={isLoading} onGameLoad={handleLoadGameAndCloseModal} />
         ) : (
           <>
             {/* Left Column */}
@@ -144,53 +155,68 @@ const App: React.FC = () => {
             {/* Right Column */}
             <div className="w-5/12 flex flex-col border-l border-slate-700">
                 <div className="flex-grow overflow-y-auto">
-                    <GameLog log={gameLog} isLoading={isLoading} onTextSelect={handleTextSelection} />
+                    <GameLog log={gameLog} isLoading={isLoading} onTextSelect={handleTextSelection} onImageClick={setViewingImageUrl} />
                 </div>
                 <div className="flex-shrink-0 p-4 border-t border-slate-600 bg-slate-800/50">
-                   <div className="flex justify-between items-center mb-2">
-                     <p className="text-sm text-slate-400 font-modesto tracking-wider">Player Actions</p>
-                     <div className="flex items-center gap-2">
-                       <ModelSwitcher 
-                         currentModel={dmModel}
-                         onModelChange={handleModelChange}
-                         disabled={isLoading}
-                       />
-                       <button 
-                         onClick={handleTranslateClick}
-                         disabled={isLoading || !selectedText}
-                         className="flex items-center gap-2 px-3 py-1 rounded-md bg-[var(--dnd5e-color-olive)] hover:bg-red-900 border border-amber-800 text-white transition-all duration-200 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed group"
-                         aria-label="Translate selected text"
-                       >
-                          <TranslateIcon className="w-5 h-5 text-amber-300 group-hover:text-white transition-colors" />
-                          <span className="text-sm font-roboto-slab font-bold">Translate</span>
-                       </button>
-                       <button 
-                         onClick={() => setIsJournalVisible(true)}
-                         disabled={isLoading}
-                         className="flex items-center gap-2 px-3 py-1 rounded-md bg-[var(--dnd5e-color-olive)] hover:bg-red-900 border border-amber-800 text-white transition-all duration-200 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed group"
-                         aria-label="View Journal"
-                       >
-                          <JournalIcon className="w-5 h-5 text-amber-300 group-hover:text-white transition-colors" />
-                          <span className="text-sm font-roboto-slab font-bold">Journal</span>
-                       </button>
-                       <button 
-                         onClick={() => setIsSheetVisible(true)}
-                         disabled={isLoading}
-                         className="flex items-center gap-2 px-3 py-1 rounded-md bg-[var(--dnd5e-color-olive)] hover:bg-red-900 border border-amber-800 text-white transition-all duration-200 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed group"
-                         aria-label="View Character Sheet"
-                       >
-                          <CharacterIcon className="w-5 h-5 text-amber-300 group-hover:text-white transition-colors" />
-                          <span className="text-sm font-roboto-slab font-bold">Sheet</span>
-                       </button>
-                     </div>
-                  </div>
-                  <div className="flex justify-center mb-3">
-                    <RollTypeSelector 
-                        currentRollType={rollType}
-                        onRollTypeChange={handleRollTypeChange}
-                        disabled={isLoading}
-                    />
-                  </div>
+                   <div className="flex items-center mb-3">
+                        {/* Left column */}
+                        <div className="flex-1 flex justify-start">
+                             <ModelSwitcher 
+                                currentModel={dmModel}
+                                onModelChange={handleModelChange}
+                                disabled={isLoading}
+                            />
+                        </div>
+                        {/* Center column */}
+                        <div className="flex-none">
+                            <RollTypeSelector 
+                                currentRollType={rollType}
+                                onRollTypeChange={handleRollTypeChange}
+                                disabled={isLoading}
+                            />
+                        </div>
+                        {/* Right column */}
+                        <div className="flex-1 flex justify-end">
+                            <div className="flex items-center gap-2 flex-wrap justify-end">
+                                <button 
+                                    onClick={handleTranslateClick}
+                                    disabled={isLoading || !selectedText}
+                                    className="flex items-center p-2 rounded-md bg-[var(--dnd5e-color-olive)] hover:bg-red-900 border border-amber-800 text-white transition-all duration-200 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed group"
+                                    aria-label="Translate selected text"
+                                    title="Translate selected text"
+                                >
+                                    <TranslateIcon className="w-5 h-5 text-amber-300 group-hover:text-white transition-colors" />
+                                </button>
+                                <button 
+                                    onClick={() => setIsJournalVisible(true)}
+                                    disabled={isLoading}
+                                    className="flex items-center p-2 rounded-md bg-[var(--dnd5e-color-olive)] hover:bg-red-900 border border-amber-800 text-white transition-all duration-200 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed group"
+                                    aria-label="View Journal"
+                                    title="View Journal"
+                                >
+                                    <JournalIcon className="w-5 h-5 text-amber-300 group-hover:text-white transition-colors" />
+                                </button>
+                                <button 
+                                    onClick={() => setIsSheetVisible(true)}
+                                    disabled={isLoading}
+                                    className="flex items-center p-2 rounded-md bg-[var(--dnd5e-color-olive)] hover:bg-red-900 border border-amber-800 text-white transition-all duration-200 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed group"
+                                    aria-label="View Character Sheet"
+                                    title="View Character Sheet"
+                                >
+                                    <CharacterIcon className="w-5 h-5 text-amber-300 group-hover:text-white transition-colors" />
+                                </button>
+                                <button 
+                                    onClick={() => setIsSettingsVisible(true)}
+                                    disabled={isLoading}
+                                    className="flex items-center p-2 rounded-md bg-[var(--dnd5e-color-olive)] hover:bg-red-900 border border-amber-800 text-white transition-all duration-200 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed group"
+                                    aria-label="Game Settings"
+                                    title="Game Settings"
+                                >
+                                    <SettingsIcon className="w-5 h-5 text-amber-300 group-hover:text-white transition-colors" />
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                   <DiceRoller onRoll={handleDiceRoll} disabled={isLoading} />
                   <PlayerInput onSend={handlePlayerAction} disabled={isLoading} />
                   {error && <p className="text-red-400 mt-2 text-center">{error}</p>}
@@ -231,6 +257,22 @@ const App: React.FC = () => {
           notes={personalNotes}
           onClose={() => setIsJournalVisible(false)}
           onNotesSave={handleNotesSaveAndCloseModal}
+        />
+      )}
+
+      {isSettingsVisible && (
+        <SettingsModal
+            isOpen={isSettingsVisible}
+            onClose={() => setIsSettingsVisible(false)}
+            onSaveGame={handleSaveGame}
+        />
+      )}
+
+      {viewingImageUrl && (
+        <ImageModal 
+            imageUrl={viewingImageUrl}
+            altText="Enlarged view of attached image"
+            onClose={() => setViewingImageUrl(null)}
         />
       )}
       

@@ -6,13 +6,15 @@ import CharacterSheetForm, { initialSheetState } from './CharacterSheetForm';
 interface CharacterCreationProps {
   onCharacterFinalized: (sheet: CharacterSheet) => void;
   isProcessing: boolean;
+  onGameLoad: (fileContent: string) => void;
 }
 
-const CharacterCreation: React.FC<CharacterCreationProps> = ({ onCharacterFinalized, isProcessing }) => {
+const CharacterCreation: React.FC<CharacterCreationProps> = ({ onCharacterFinalized, isProcessing, onGameLoad }) => {
   const [sheet, setSheet] = useState<CharacterSheet>(initialSheetState);
   const [isParsing, setIsParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const loadGameInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -50,7 +52,23 @@ const CharacterCreation: React.FC<CharacterCreationProps> = ({ onCharacterFinali
     }
   };
 
+  const handleLoadGameFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+        const content = await file.text();
+        onGameLoad(content);
+    } catch (e) {
+        setError(e instanceof Error ? `Failed to read save file: ${e.message}` : 'An unknown error occurred.');
+        console.error(e);
+    } finally {
+        if (loadGameInputRef.current) loadGameInputRef.current.value = '';
+    }
+  };
+
   const handleUploadClick = () => fileInputRef.current?.click();
+  const handleLoadGameClick = () => loadGameInputRef.current?.click();
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,6 +95,13 @@ const CharacterCreation: React.FC<CharacterCreationProps> = ({ onCharacterFinali
             >
                 {isParsing ? 'Reading the Scrolls...' : 'Upload & Auto-fill with AI'}
             </button>
+            <button
+                onClick={handleLoadGameClick}
+                disabled={isParsing || isProcessing}
+                className="px-6 py-3 border-2 border-dashed border-slate-500 rounded-lg text-slate-300 hover:bg-slate-600 hover:border-[var(--dnd5e-color-gold)] hover:text-[var(--dnd5e-color-gold)] transition-colors disabled:opacity-50 disabled:cursor-wait font-roboto-slab"
+            >
+                Load Game
+            </button>
         </div>
         
         {error && <p className="text-red-400 my-4 text-center">{error}</p>}
@@ -101,6 +126,14 @@ const CharacterCreation: React.FC<CharacterCreationProps> = ({ onCharacterFinali
             onChange={handleFileChange}
             className="hidden"
             accept=".txt, .md"
+            disabled={isParsing || isProcessing}
+        />
+        <input
+            type="file"
+            ref={loadGameInputRef}
+            onChange={handleLoadGameFile}
+            className="hidden"
+            accept=".json"
             disabled={isParsing || isProcessing}
         />
     </div>

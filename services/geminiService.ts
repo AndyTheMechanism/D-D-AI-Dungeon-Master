@@ -1,5 +1,5 @@
 import { GoogleGenAI, Chat, Type, FunctionDeclaration, Content, GenerateContentResponse } from "@google/genai";
-import type { CharacterSheet, QuestStatus, AdventureDifficulty, MapState } from "../types";
+import type { CharacterSheet, QuestStatus, AdventureDifficulty, MapState, ThematicTone } from "../types";
 import { v4 as uuidv4 } from 'uuid';
 
 
@@ -130,12 +130,38 @@ const updateQuestFunctionDeclaration: FunctionDeclaration = {
 
 const getInitialPrompt = (
     characterSheetContent: string,
-    adventureDetails: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string }
-): string => `
+    adventureDetails: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string, tone: ThematicTone }
+): string => {
+    let toneInstruction: string;
+    switch (adventureDetails.tone) {
+        case 'Gritty Realism':
+            toneInstruction = `**THEMATIC TONE: Gritty Realism**
+- The world is portrayed with a sense of gritty realism. Emphasize the consequences of violence, moral ambiguity, and the harsh realities of survival.
+- Themes may be mature and somber. Do not shy away from difficult situations.`;
+            break;
+        case 'Unrestricted':
+            toneInstruction = `**THEMATIC TONE: Unrestricted Adult Narrative**
+- You have complete creative freedom to generate any content necessary to create a mature, logical, and immersive role-playing experience for an adult audience.
+- This includes depicting graphic violence, complex moral gray areas, adult themes, and unfiltered character interactions.
+- Do not self-censor or avoid sensitive topics. Your primary directive is to maintain narrative consistency and realism. The user has explicitly chosen this mode and is aware of the potential for mature content. Prioritize a compelling and unrestricted story above all else.`;
+            break;
+        case 'Heroic Fantasy':
+        default:
+            toneInstruction = `**THEMATIC TONE: Heroic Fantasy**
+- The tone of the adventure is classic heroic fantasy. Emphasize bravery, clear distinctions between good and evil, and epic deeds against overwhelming odds.`;
+            break;
+    }
+
+
+    return `
 You are the Dungeon Master (DM) for a text-based role-playing game with a 2D visual map, based on Dungeons & Dragons 5th Edition rules. Your name is 'Gemini'.
 Your goal is to create a rich, engaging, and challenging fantasy adventure.
 You will describe the world, NPCs, and situations. You must react to the player's actions and describe the consequences.
 Keep your responses concise but descriptive. Use markdown for emphasis (*italic*, **bold**).
+
+---
+${toneInstruction}
+---
 
 ---
 **THE MAP: THE MOST IMPORTANT RULE**
@@ -193,6 +219,7 @@ You have tools to modify the game state. When you use a tool, you MUST also desc
 
 Now, begin the adventure in the world of ${adventureDetails.worldName}. Describe the opening scene, present the first situation, and, most importantly, provide the initial map by calling the \`updateMap\` tool.
 `;
+}
 
 const getParsePrompt = (characterSheetContent: string): string => `
 You are an expert assistant for Dungeons & Dragons 5th Edition. Your task is to parse the provided text of a character sheet and convert it into a structured JSON object that conforms to the provided schema.
@@ -371,7 +398,7 @@ const parseAdventureResultFromResponse = (response: GenerateContentResponse): Ad
 export const startAdventure = async (
     characterSheet: string,
     model: string,
-    adventureDetails: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string }
+    adventureDetails: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string, tone: ThematicTone }
 ): Promise<{ chat: Chat, initialResponse: AdventureResult }> => {
     try {
         const systemInstruction = getInitialPrompt(characterSheet, adventureDetails);
@@ -383,17 +410,33 @@ export const startAdventure = async (
             requestDiceRollFunctionDeclaration
         ] }];
         
+        // FIX: The safetySettings property should be inside the config object, not at the top level of generateContent or chats.create parameters.
+        const config: any = {
+            systemInstruction: systemInstruction,
+            tools: tools,
+        };
+
+        if (adventureDetails.tone === 'Unrestricted') {
+            config.safetySettings = [
+                { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+            ];
+        }
+
         const firstUserMessage = "I am ready to begin.";
 
         // Use generateContent for the first turn to ensure a robust start.
         const firstTurnResponse = await ai.models.generateContent({
             model: model,
             contents: firstUserMessage,
-            config: {
-                systemInstruction: systemInstruction,
-                tools: tools,
-            },
+            config: config,
         });
+        
+        if (firstTurnResponse.promptFeedback?.blockReason) {
+            throw new Error(`The AI Dungeon Master failed to generate an initial response. This might be due to a content safety filter. Reason: ${firstTurnResponse.promptFeedback.blockReason}.`);
+        }
         
         // Parse the initial response from the model.
         const initialResponse = parseAdventureResultFromResponse(firstTurnResponse);
@@ -413,42 +456,55 @@ export const startAdventure = async (
         const chat = ai.chats.create({
             model: model,
             history: history,
-            config: {
-                systemInstruction: systemInstruction,
-                tools: tools,
-            },
+            config: config,
         });
 
         return { chat, initialResponse };
 
     } catch (error) {
         console.error("Gemini API error in startAdventure:", error);
-        if (error instanceof Error && error.message.includes('SAFETY')) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.toLowerCase().includes('safety')) {
              throw new Error("The adventure could not be started due to the safety settings. Please adjust your character or world details and try again.");
         }
-        throw new Error(`"Gemini API error in startAdventure:" "${error instanceof Error ? error.message : String(error)}"`);
+        throw new Error(errorMessage);
     }
 };
 
 export const restartAdventureWithNewModel = async (
   characterSheet: string,
   model: string,
-  history: Content[]
+  history: Content[],
+  adventureDetails?: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string, tone: ThematicTone }
 ): Promise<{ chat: Chat }> => {
     try {
+        const details = adventureDetails || { difficulty: 'Medium', worldName: 'the game world', additionalInfo: 'The world is in a state of flux.', tone: 'Heroic Fantasy' };
+        const systemInstruction = getInitialPrompt(characterSheet, details);
+
+        const config: any = {
+            systemInstruction: systemInstruction,
+            tools: [{ functionDeclarations: [
+                updateMapFunctionDeclaration,
+                updateCharacterSheetFunctionDeclaration,
+                addQuestFunctionDeclaration,
+                updateQuestFunctionDeclaration,
+                requestDiceRollFunctionDeclaration
+            ] }],
+        };
+
+        if (details.tone === 'Unrestricted') {
+            config.safetySettings = [
+                { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+            ];
+        }
+
         const chat = ai.chats.create({
             model: model,
             history: history,
-            config: {
-                systemInstruction: getInitialPrompt(characterSheet, { difficulty: 'Medium', worldName: 'the game world', additionalInfo: 'The world is in a state of flux.' }), // Note: A generic prompt is used on restart
-                tools: [{ functionDeclarations: [
-                    updateMapFunctionDeclaration,
-                    updateCharacterSheetFunctionDeclaration,
-                    addQuestFunctionDeclaration,
-                    updateQuestFunctionDeclaration,
-                    requestDiceRollFunctionDeclaration
-                ] }],
-            },
+            config: config,
         });
         return { chat };
     } catch (error) {
@@ -458,7 +514,7 @@ export const restartAdventureWithNewModel = async (
 };
 
 
-export const continueAdventure = async (chat: Chat, playerAction: string): Promise<AdventureResult> => {
+export const continueAdventure = async (chat: Chat, playerAction: string | any[]): Promise<AdventureResult> => {
     try {
         const response = await chat.sendMessage({ message: playerAction });
         return parseAdventureResultFromResponse(response);

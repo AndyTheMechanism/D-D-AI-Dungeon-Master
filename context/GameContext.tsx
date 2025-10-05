@@ -1,5 +1,5 @@
 import React, { createContext, useReducer, useContext, Dispatch } from 'react';
-import { GameMessage, CharacterSheet, Quest, PersonalNote, DmModel, MapState, RollType } from '../types';
+import { GameMessage, CharacterSheet, Quest, PersonalNote, DmModel, MapState, RollType, AdventureDetails, SaveData } from '../types';
 import { Chat } from '@google/genai';
 
 // State shape
@@ -16,6 +16,7 @@ interface GameState {
     mapState: MapState | null;
     pendingOocMessage: string | null;
     rollType: RollType;
+    adventureDetails: AdventureDetails | null;
 }
 
 // Initial state
@@ -32,11 +33,13 @@ const initialState: GameState = {
     mapState: null,
     pendingOocMessage: null,
     rollType: 'normal',
+    adventureDetails: null,
 };
 
 // Action types
 export type Action =
-    | { type: 'START_GAME_INIT'; payload: { chat: Chat; sheet: CharacterSheet } }
+    | { type: 'START_GAME_INIT'; payload: { chat: Chat; sheet: CharacterSheet, adventureDetails: AdventureDetails } }
+    | { type: 'LOAD_GAME'; payload: SaveData & { chat: Chat } }
     | { type: 'SET_LOADING'; payload: boolean }
     | { type: 'SET_ERROR'; payload: string | null }
     | { type: 'ADD_PLAYER_MESSAGE'; payload: GameMessage }
@@ -63,11 +66,31 @@ const gameReducer = (state: GameState, action: Action): GameState => {
                 gameStarted: true,
                 chat: action.payload.chat,
                 characterSheet: action.payload.sheet,
+                adventureDetails: action.payload.adventureDetails,
                 isLoading: false,
                 error: null,
                 gameLog: [], // Clear log for new game
                 mapState: null, // Clear map for new game
             };
+        case 'LOAD_GAME': {
+            const { payload } = action;
+            return {
+                ...state,
+                gameStarted: true,
+                characterSheet: payload.characterSheet,
+                quests: payload.quests,
+                personalNotes: payload.personalNotes,
+                mapState: payload.mapState,
+                dmModel: payload.dmModel,
+                chat: payload.chat,
+                gameLog: payload.gameLog,
+                adventureDetails: payload.adventureDetails,
+                rollType: payload.rollType,
+                isLoading: false,
+                error: null,
+                pendingOocMessage: null,
+            };
+        }
         case 'ADD_PLAYER_MESSAGE':
             return { ...state, gameLog: [...state.gameLog, action.payload] };
         case 'PLAYER_ACTION_ERROR':

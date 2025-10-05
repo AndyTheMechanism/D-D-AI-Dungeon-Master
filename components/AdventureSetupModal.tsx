@@ -1,11 +1,11 @@
 import React, { useState, useCallback } from 'react';
-import { CharacterSheet, AdventureDifficulty } from '../types';
+import { CharacterSheet, AdventureDifficulty, ThematicTone } from '../types';
 import GenerateIcon from './icons/GenerateIcon';
 
 interface AdventureSetupModalProps {
     sheet: CharacterSheet;
     onClose: () => void;
-    onStartAdventure: (sheet: CharacterSheet, details: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string }) => void;
+    onStartAdventure: (sheet: CharacterSheet, details: { difficulty: AdventureDifficulty, worldName: string, additionalInfo: string, tone: ThematicTone }) => void;
     onGenerateDetails: (difficulty: AdventureDifficulty) => Promise<{ worldName: string, additionalInfo: string }>;
 }
 
@@ -13,6 +13,7 @@ const difficulties: AdventureDifficulty[] = ['Easy', 'Medium', 'Hard', 'Hardcore
 
 const AdventureSetupModal: React.FC<AdventureSetupModalProps> = ({ sheet, onClose, onStartAdventure, onGenerateDetails }) => {
     const [difficulty, setDifficulty] = useState<AdventureDifficulty>('Medium');
+    const [tone, setTone] = useState<ThematicTone>('Heroic Fantasy');
     const [worldName, setWorldName] = useState('');
     const [additionalInfo, setAdditionalInfo] = useState('');
     const [isGenerating, setIsGenerating] = useState(false);
@@ -35,7 +36,7 @@ const AdventureSetupModal: React.FC<AdventureSetupModalProps> = ({ sheet, onClos
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        onStartAdventure(sheet, { difficulty, worldName, additionalInfo });
+        onStartAdventure(sheet, { difficulty, worldName, additionalInfo, tone });
     };
 
     return (
@@ -78,10 +79,62 @@ const AdventureSetupModal: React.FC<AdventureSetupModalProps> = ({ sheet, onClos
                             ))}
                         </div>
                     </div>
+                    
+                    {/* Thematic Tone Selector */}
+                    <div>
+                        <label className="block text-lg font-bold font-signika text-slate-300 mb-2">2. Set Thematic Tone</label>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setTone('Heroic Fantasy')}
+                                className={`px-4 py-3 rounded-md font-bold transition-all border-2 ${
+                                    tone === 'Heroic Fantasy'
+                                        ? 'bg-sky-600 border-sky-400 text-white shadow-lg'
+                                        : 'bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600 hover:border-slate-500'
+                                }`}
+                            >
+                                Heroic Fantasy
+                            </button>
+                             <button
+                                type="button"
+                                onClick={() => setTone('Gritty Realism')}
+                                className={`px-4 py-3 rounded-md font-bold transition-all border-2 ${
+                                    tone === 'Gritty Realism'
+                                        ? 'bg-red-800 border-red-600 text-white shadow-lg'
+                                        : 'bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600 hover:border-slate-500'
+                                }`}
+                            >
+                                Gritty Realism
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setTone('Unrestricted')}
+                                className={`px-4 py-3 rounded-md font-bold transition-all border-2 ${
+                                    tone === 'Unrestricted'
+                                        ? 'bg-purple-800 border-purple-600 text-white shadow-lg'
+                                        : 'bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600 hover:border-slate-500'
+                                }`}
+                            >
+                                Unrestricted
+                            </button>
+                        </div>
+                         {tone === 'Gritty Realism' && (
+                            <p className="text-xs text-slate-400 mt-2 p-2 bg-slate-800 rounded">
+                                This tone creates a more challenging and somber world with mature themes like moral ambiguity and the consequences of violence. It also creates the opportunity to create and describe any descriptions and scenes without moral restrictions.
+                                Note: Descriptions will only be created where it is logical and appropriate to the roleplaying scene.
+                            </p>
+                        )}
+                        {tone === 'Unrestricted' && (
+                            <div className="text-xs text-amber-300 mt-2 p-3 bg-red-900/50 border border-red-700 rounded-md">
+                                <p className="font-bold text-base">⚠️ WARNING: Mature Content</p>
+                                <p className="mt-1">This mode removes content filters and is intended for mature audiences. It may generate explicit, graphic, or otherwise sensitive content. Player discretion is strongly advised.</p>
+                            </div>
+                        )}
+                    </div>
 
                     {/* World Name */}
                     <div>
-                        <label htmlFor="worldName" className="block text-lg font-bold font-signika text-slate-300 mb-2">2. Set World Name</label>
+                        <label htmlFor="worldName" className="block text-lg font-bold font-signika text-slate-300 mb-2">3. Set World Name</label>
                         <input
                             id="worldName"
                             type="text"
@@ -94,7 +147,7 @@ const AdventureSetupModal: React.FC<AdventureSetupModalProps> = ({ sheet, onClos
 
                     {/* Additional Info */}
                     <div>
-                        <label htmlFor="additionalInfo" className="block text-lg font-bold font-signika text-slate-300 mb-2">3. Provide Additional Information (Optional)</label>
+                        <label htmlFor="additionalInfo" className="block text-lg font-bold font-signika text-slate-300 mb-2">4. Provide Additional Information (Optional)</label>
                         <textarea
                             id="additionalInfo"
                             value={additionalInfo}
