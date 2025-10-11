@@ -1,7 +1,7 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useGameState, useGameDispatch } from '../context/GameContext';
-import { startAdventure, continueAdventure, restartAdventureWithNewModel, generateAdventureDetails } from '../services/geminiService';
-import { CharacterSheet, Dice, DmModel, GameMessage, PersonalNote, Quest, AdventureDifficulty, RollType, ThematicTone, AdventureDetails, SaveData } from '../types';
+import { startAdventure, continueAdventure, restartAdventureWithNewModel, generateAdventureDetails, generateEntityImage } from '../services/geminiService';
+import { CharacterSheet, Dice, DmModel, GameMessage, PersonalNote, Quest, AdventureDifficulty, RollType, ThematicTone, AdventureDetails, SaveData, MapEntity } from '../types';
 import { AdventureResult } from '../services/geminiService';
 
 // Helper functions (previously in App.tsx)
@@ -112,6 +112,8 @@ export const useGameActions = () => {
     const state = useGameState();
     const dispatch = useGameDispatch();
     const { chat, isLoading, characterSheet, personalNotes, dmModel, quests, pendingOocMessage, rollType, adventureDetails, gameLog } = state;
+    const newlyGeneratedImages = useRef<Record<string, { name: string; imageBase64: string }>>({});
+
 
     const processAndDispatchResult = useCallback((
         result: AdventureResult,
@@ -202,34 +204,50 @@ export const useGameActions = () => {
         if (!chat || isLoading || !characterSheet) return;
 
         const userMessageParts: any[] = [];
-        if (attachment) {
-            userMessageParts.push({
-                inlineData: { mimeType: attachment.mimeType, data: attachment.data }
-            });
-        }
-        if (action) {
-            userMessageParts.push({ text: action });
-        }
-        if (userMessageParts.length === 0) return;
-
-        if (pendingOocMessage) {
-            const textPartIndex = userMessageParts.findIndex(p => 'text' in p);
-            if (textPartIndex > -1) {
-                userMessageParts[textPartIndex].text = `${pendingOocMessage}\n\n${userMessageParts[textPartIndex].text}`;
-            } else {
-                userMessageParts.unshift({ text: pendingOocMessage });
-            }
-        }
-
         let logText = action;
         let imageUrl: string | undefined;
         let attachmentName: string | undefined;
 
+        // Combine pending OOC message, new images, and player action
+        let combinedActionText = action || '';
+        if (pendingOocMessage) {
+            combinedActionText = `${pendingOocMessage}\n\n${combinedActionText}`;
+        }
+
+        // Handle newly generated images
+        const newImageIds = Object.keys(newlyGeneratedImages.current);
+        if (newImageIds.length > 0) {
+            let oocPreamble = `OOC: New portraits were generated. For future \`updateMap\` calls, please use the attached images by including the provided base64 data in the \`imageBase64\` field for the corresponding entity.`;
+            
+            // FIX: Use Object.keys to iterate, as Object.entries had poor type inference in this context.
+            const imageTextDescriptions = newImageIds.map(id => `- Entity "${newlyGeneratedImages.current[id].name}" (ID: ${id})`).join('\n');
+            oocPreamble = `${oocPreamble}\n${imageTextDescriptions}`;
+            
+            newImageIds.forEach(id => {
+                userMessageParts.push({
+                    inlineData: { mimeType: 'image/png', data: newlyGeneratedImages.current[id].imageBase64 }
+                });
+            });
+
+            combinedActionText = `${oocPreamble}\n\n---\n\n${combinedActionText}`;
+            newlyGeneratedImages.current = {}; // Clear after processing
+        }
+
+        // Handle user-provided attachment
         if (attachment) {
+            userMessageParts.unshift({ // Add to the front so text comes last
+                inlineData: { mimeType: attachment.mimeType, data: attachment.data }
+            });
             logText = `[Attached: ${attachment.name}] ${action || ''}`.trim();
             imageUrl = `data:${attachment.mimeType};base64,${attachment.data}`;
             attachmentName = attachment.name;
         }
+
+        if (combinedActionText.trim()) {
+            userMessageParts.push({ text: combinedActionText.trim() });
+        }
+
+        if (userMessageParts.length === 0) return;
 
         const newPlayerMessage: GameMessage = { sender: 'player', text: logText, imageUrl, attachmentName };
         dispatch({ type: 'ADD_PLAYER_MESSAGE', payload: newPlayerMessage });
@@ -239,8 +257,8 @@ export const useGameActions = () => {
         }
 
         dispatch({ type: 'SET_LOADING', payload: true });
-
-        const messagePayload = userMessageParts.length === 1 && userMessageParts[0].text
+        
+        const messagePayload = userMessageParts.length === 1 && 'text' in userMessageParts[0]
             ? userMessageParts[0].text
             : userMessageParts;
 
@@ -484,6 +502,25 @@ export const useGameActions = () => {
             console.error(e);
         }
     }, [dispatch]);
+    
+    const handleGenerateEntityImage = useCallback(async (entity: MapEntity) => {
+        if (!entity) throw new Error("Entity is required to generate an image.");
+
+        const prompt = `A detailed, purely visual 64x64 pixel art portrait of a D&D fantasy character: a ${entity.name || entity.type}. The composition is a close-up portrait focusing on the character's face and shoulders, set against a simple, non-distracting background.`;
+        const imageBase64 = await generateEntityImage(prompt);
+        
+        // Store for next player action
+        newlyGeneratedImages.current[entity.id] = {
+            name: entity.name || entity.type,
+            imageBase64: imageBase64
+        };
+
+        // Update local state immediately for instant UI feedback
+        dispatch({ type: 'UPDATE_ENTITY_IMAGE', payload: { entityId: entity.id, imageBase64 } });
+        
+        return imageBase64;
+
+    }, [dispatch]);
 
     return {
         handleStartGame,
@@ -497,5 +534,6 @@ export const useGameActions = () => {
         handleRollTypeChange,
         handleSaveGame,
         handleLoadGame,
+        handleGenerateEntityImage,
     };
 };

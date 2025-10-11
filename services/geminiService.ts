@@ -1,5 +1,5 @@
 import { GoogleGenAI, Chat, Type, FunctionDeclaration, Content, GenerateContentResponse } from "@google/genai";
-import type { CharacterSheet, QuestStatus, AdventureDifficulty, MapState, ThematicTone } from "../types";
+import type { CharacterSheet, QuestStatus, AdventureDifficulty, MapState, ThematicTone, MapEntity } from "../types";
 import { v4 as uuidv4 } from 'uuid';
 
 
@@ -30,8 +30,8 @@ const updateMapFunctionDeclaration: FunctionDeclaration = {
   parameters: {
     type: Type.OBJECT,
     properties: {
-        width: { type: Type.NUMBER, description: "The width of the map grid, e.g., 15." },
-        height: { type: Type.NUMBER, description: "The height of the map grid, e.g., 15." },
+        width: { type: Type.NUMBER, description: "The width of the map grid, e.g., 25." },
+        height: { type: Type.NUMBER, description: "The height of the map grid, e.g., 25." },
         entities: {
             type: Type.ARRAY,
             description: "A complete list of all visible entities on the map.",
@@ -43,6 +43,7 @@ const updateMapFunctionDeclaration: FunctionDeclaration = {
                     y: { type: Type.NUMBER, description: "The zero-indexed y-coordinate, from top to bottom." },
                     name: { type: Type.STRING, description: "Optional name for the entity, e.g., 'Goblin Shaman' or 'Health Potion'." },
                     color: { type: Type.STRING, description: "For 'object' type entities only. Optional CSS color name (e.g., 'gold', 'saddlebrown') or hex code (e.g., '#ff0000') to visually distinguish them." },
+                    imageBase64: { type: Type.STRING, description: "Optional base64 encoded string of a 64x64 PNG image for the entity. Use this to maintain a consistent visual representation for an entity once it has been generated." },
                 },
                 required: ['type', 'x', 'y']
             }
@@ -168,9 +169,10 @@ ${toneInstruction}
 - You MUST manage a 2D grid map of the player's immediate surroundings. The top-left corner is coordinate (0, 0).
 - **On EVERY turn where the player's position or their surroundings change, you MUST call the \`updateMap\` function.**
 - The map data you provide must be a complete representation of everything the character can see.
-- Provide a full grid, typically around 15x15, to show the area. Include walls, floors (empty space), the player, enemies, items, doors, etc.
+- Provide a full grid, typically around 25x25, to show the area. Include walls, floors (empty space), the player, enemies, items, doors, etc.
 - The player's token should generally be near the center of the map view.
 - For entities of type 'object', you can optionally provide a 'color' property (e.g., 'gold', '#00ff00', 'saddlebrown') to visually distinguish them. For example, a health potion could be 'red', a chest 'saddlebrown', a key 'gold'. If not provided, it will default to yellow.
+- **Entity Images:** Entities can have an associated image. If you are provided with a base64 image string for an entity via an OOC message, you MUST include that string in the \`imageBase64\` field for that entity in all subsequent \`updateMap\` calls to ensure visual consistency.
 - When you use the \`updateMap\` tool, you MUST ALSO describe the scene narratively. The text and the map must be synchronized.
 ---
 
@@ -364,7 +366,13 @@ const parseAdventureResultFromResponse = (response: GenerateContentResponse): Ad
                      mapUpdate = {
                         width: fc.args.width as number,
                         height: fc.args.height as number,
-                        entities: (fc.args.entities as any[]).map(e => ({ ...e, id: uuidv4() }))
+                        entities: (fc.args.entities as any[]).map((e: Partial<MapEntity>) => ({ 
+                            ...e,
+                            type: e.type!,
+                            x: e.x!,
+                            y: e.y!,
+                            id: uuidv4() 
+                        }))
                     };
                 } else if (fc.name === 'updateCharacterSheet' && Array.isArray(fc.args.updates)) {
                     if (!sheetUpdates) sheetUpdates = {};
@@ -570,5 +578,27 @@ export const generateAdventureDetails = async (
     } catch (error) {
         console.error("Gemini API error in generateAdventureDetails:", error);
         throw new Error("The AI failed to generate adventure details. Please try again or fill them in manually.");
+    }
+};
+
+export const generateEntityImage = async (prompt: string): Promise<string> => {
+    try {
+        const response = await ai.models.generateImages({
+            model: 'imagen-4.0-generate-001',
+            prompt: prompt,
+            config: {
+              numberOfImages: 1,
+              outputMimeType: 'image/png',
+              aspectRatio: '1:1',
+            },
+        });
+
+        if (response.generatedImages && response.generatedImages.length > 0) {
+            return response.generatedImages[0].image.imageBytes;
+        }
+        throw new Error("Image generation failed to return an image.");
+    } catch (error) {
+        console.error("Gemini API error in generateEntityImage:", error);
+        throw new Error("The AI failed to generate an image for the entity.");
     }
 };

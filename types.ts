@@ -40,6 +40,7 @@ export interface MapEntity {
   y: number;
   name?: string;
   color?: string;
+  imageBase64?: string;
 }
 
 export interface MapState {

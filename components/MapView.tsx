@@ -1,16 +1,20 @@
 import React from 'react';
 import { MapState, MapEntity, EntityType } from '../types';
+import CameraIcon from './icons/CameraIcon';
+import CreatureTokenIcon from './icons/CreatureTokenIcon';
 
 interface MapViewProps {
   mapState: MapState | null;
+  onEntityClick: (entity: MapEntity, event: React.MouseEvent) => void;
+  characterName?: string;
 }
 
-const getEntityVisuals = (entity: MapEntity | { type: 'floor' }): { component: React.ReactNode, title: string } => {
+const getEntityVisuals = (entity: MapEntity | { type: 'floor' }, characterName?: string): { component: React.ReactNode, title: string } => {
   switch (entity.type) {
     case 'player':
       return {
-        component: <div className="w-3/4 h-3/4 bg-blue-500 rounded-full shadow-lg" />,
-        title: (entity as MapEntity).name || 'Player'
+        component: <CreatureTokenIcon className="w-5/6 h-5/6 text-blue-500 drop-shadow-lg" />,
+        title: characterName || (entity as MapEntity).name || 'Player'
       };
     case 'wall':
       return {
@@ -19,7 +23,7 @@ const getEntityVisuals = (entity: MapEntity | { type: 'floor' }): { component: R
       };
     case 'enemy':
       return {
-        component: <div className="w-3/4 h-3/4 bg-red-600 rounded-full shadow-md" />,
+        component: <CreatureTokenIcon className="w-5/6 h-5/6 text-red-600" />,
         title: (entity as MapEntity).name || 'Enemy'
       };
     case 'object':
@@ -41,7 +45,7 @@ const getEntityVisuals = (entity: MapEntity | { type: 'floor' }): { component: R
   }
 };
 
-const MapView: React.FC<MapViewProps> = ({ mapState }) => {
+const MapView: React.FC<MapViewProps> = ({ mapState, onEntityClick, characterName }) => {
   if (!mapState) {
     return (
       <div className="w-full h-full flex items-center justify-center text-slate-500 bg-black font-signika italic">
@@ -77,16 +81,21 @@ const MapView: React.FC<MapViewProps> = ({ mapState }) => {
             aria-label="Game Map"
         >
             {gridCells.map(({ x, y, entity }) => {
-                const visual = entity ? getEntityVisuals(entity) : getEntityVisuals({ type: 'floor' });
+                const visual = entity ? getEntityVisuals(entity, characterName) : getEntityVisuals({ type: 'floor' });
                 return (
-                    <div
+                    <button
                         key={`${x}-${y}`}
-                        className="flex items-center justify-center border-r border-b border-slate-800"
+                        className="relative flex items-center justify-center border-r border-b border-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:z-10 disabled:cursor-default"
                         title={visual.title}
                         role="gridcell"
+                        onClick={(e) => entity && onEntityClick(entity, e)}
+                        disabled={!entity || entity.type === 'wall' || entity.type === 'floor'}
                     >
                        {visual.component}
-                    </div>
+                       {entity?.imageBase64 && (
+                          <CameraIcon className="absolute bottom-0 right-0 w-2 h-2 text-white bg-black/50 rounded-full p-px" />
+                       )}
+                    </button>
                 );
             })}
         </div>

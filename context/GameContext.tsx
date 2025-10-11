@@ -51,7 +51,8 @@ export type Action =
     | { type: 'SET_CHAT'; payload: Chat | null }
     | { type: 'SET_PENDING_OOC_MESSAGE'; payload: string }
     | { type: 'CLEAR_PENDING_OOC_MESSAGE' }
-    | { type: 'SET_ROLL_TYPE'; payload: RollType };
+    | { type: 'SET_ROLL_TYPE'; payload: RollType }
+    | { type: 'UPDATE_ENTITY_IMAGE'; payload: { entityId: string; imageBase64: string } };
 
 // Reducer
 const gameReducer = (state: GameState, action: Action): GameState => {
@@ -127,6 +128,19 @@ const gameReducer = (state: GameState, action: Action): GameState => {
             return { ...state, pendingOocMessage: null };
         case 'SET_ROLL_TYPE':
             return { ...state, rollType: action.payload };
+        case 'UPDATE_ENTITY_IMAGE':
+            if (!state.mapState) return state;
+            return {
+                ...state,
+                mapState: {
+                    ...state.mapState,
+                    entities: state.mapState.entities.map(e =>
+                        e.id === action.payload.entityId
+                            ? { ...e, imageBase64: action.payload.imageBase64 }
+                            : e
+                    ),
+                },
+            };
         default:
             return state;
     }
